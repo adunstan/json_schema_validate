@@ -225,6 +225,8 @@ SELECT jsonschema_validate(
 
 ### CHECK Constraints
 
+Use a `jsonschema_compiled` literal for best performance. The schema is parsed once and regex patterns are cached:
+
 ```sql
 CREATE TABLE users (
     id serial PRIMARY KEY,
@@ -238,7 +240,7 @@ CREATE TABLE users (
                 "age": {"type": "integer", "minimum": 0}
             },
             "additionalProperties": false
-        }')
+        }'::jsonschema_compiled)
     )
 );
 
@@ -367,35 +369,22 @@ The following JSON Schema features are not yet implemented:
 
 ### Compiled Schemas
 
-For frequently-used schemas, use `jsonschema_compile()` to create a compiled schema handle:
+The `jsonschema_compiled` type pre-parses schemas and caches regex patterns. Use it as a literal for CHECK constraints:
 
 ```sql
--- Create a reusable compiled schema
-CREATE FUNCTION get_user_schema() RETURNS jsonschema_compiled AS $$
-    SELECT jsonschema_compile('{
-        "type": "object",
-        "required": ["name", "email"],
-        "properties": {
-            "name": {"type": "string"},
-            "email": {"type": "string", "pattern": "^[^@]+@[^@]+$"}
-        }
-    }'::jsonb);
-$$ LANGUAGE SQL IMMUTABLE;
-
--- Use the compiled schema (regex patterns are cached)
-SELECT jsonschema_is_valid(data, get_user_schema()) FROM users;
+-- Literal syntax - schema parsed once, regexes cached
+CHECK (jsonschema_is_valid(data, '{"type": "object", ...}'::jsonschema_compiled))
 ```
 
-Compiled schemas can also be stored in tables:
+Or compile programmatically for dynamic schemas:
 
 ```sql
+-- Compile from jsonb
+SELECT jsonschema_compile('{"type": "object"}'::jsonb);
+
+-- Store compiled schemas in tables
 CREATE TABLE schemas (name text PRIMARY KEY, schema jsonschema_compiled);
 INSERT INTO schemas VALUES ('user', jsonschema_compile('...'::jsonb));
-
--- Validate using stored schema
-SELECT jsonschema_is_valid(data, s.schema)
-FROM users u, schemas s
-WHERE s.name = 'user';
 ```
 
 ## License
