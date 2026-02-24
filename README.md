@@ -369,23 +369,7 @@ The following JSON Schema features are not yet implemented:
 
 ### Compiled Schemas
 
-The `jsonschema_compiled` type pre-parses schemas and caches regex patterns. Use it as a literal for CHECK constraints:
-
-```sql
--- Literal syntax - schema parsed once, regexes cached
-CHECK (jsonschema_is_valid(data, '{"type": "object", ...}'::jsonschema_compiled))
-```
-
-Or compile programmatically for dynamic schemas:
-
-```sql
--- Compile from jsonb
-SELECT jsonschema_compile('{"type": "object"}'::jsonb);
-
--- Store compiled schemas in tables
-CREATE TABLE schemas (name text PRIMARY KEY, schema jsonschema_compiled);
-INSERT INTO schemas VALUES ('user', jsonschema_compile('...'::jsonb));
-```
+Use `::jsonschema_compiled` in CHECK constraints for best performance - the schema is parsed once and regex patterns are cached for the session. See [CHECK Constraints](#check-constraints) for the recommended usage.
 
 ## License
 
