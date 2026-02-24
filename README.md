@@ -63,7 +63,7 @@ jsonschema_validate(data jsonb, schema jsonb) → jsonb
 jsonschema_validate(data json, schema json) → json
 ```
 
-Returns `NULL` if valid, or a JSON array of error objects if invalid. Each error object contains:
+Returns an empty array `[]` if valid, or a JSON array of error objects if invalid. Each error object contains:
 - `path`: JSON path to the invalid value
 - `message`: Description of the validation failure
 

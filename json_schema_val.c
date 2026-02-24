@@ -192,16 +192,12 @@ jsonschema_validate_jsonb(PG_FUNCTION_ARGS)
     Jsonb *data = PG_GETARG_JSONB_P(0);
     Jsonb *schema = PG_GETARG_JSONB_P(1);
     StringInfoData errors;
-    bool valid;
     Datum result;
 
     initStringInfo(&errors);
     appendStringInfoChar(&errors, '[');
 
-    valid = validate_jsonb_internal(data, schema, &errors);
-
-    if (valid)
-        PG_RETURN_NULL();
+    (void) validate_jsonb_internal(data, schema, &errors);
 
     /* Remove trailing comma if present */
     if (errors.len > 1 && errors.data[errors.len - 1] == ',')
@@ -228,7 +224,6 @@ jsonschema_validate_json(PG_FUNCTION_ARGS)
     Datum data_jsonb;
     Datum schema_jsonb;
     StringInfoData errors;
-    bool valid;
 
     /* Convert json to jsonb */
     data_jsonb = DirectFunctionCall1(jsonb_in,
@@ -242,10 +237,7 @@ jsonschema_validate_json(PG_FUNCTION_ARGS)
     initStringInfo(&errors);
     appendStringInfoChar(&errors, '[');
 
-    valid = validate_jsonb_internal(data, schema, &errors);
-
-    if (valid)
-        PG_RETURN_NULL();
+    (void) validate_jsonb_internal(data, schema, &errors);
 
     /* Remove trailing comma if present */
     if (errors.len > 1 && errors.data[errors.len - 1] == ',')
@@ -1648,7 +1640,6 @@ jsonschema_validate_compiled(PG_FUNCTION_ARGS)
     JsonSchemaCompiled *compiled = PG_GETARG_JSONSCHEMA_COMPILED_P(1);
     Jsonb              *schema;
     StringInfoData      errors;
-    bool                valid;
     Datum               result;
 
     /* The compiled schema is stored as jsonb internally */
@@ -1657,10 +1648,7 @@ jsonschema_validate_compiled(PG_FUNCTION_ARGS)
     initStringInfo(&errors);
     appendStringInfoChar(&errors, '[');
 
-    valid = validate_jsonb_internal(data, schema, &errors);
-
-    if (valid)
-        PG_RETURN_NULL();
+    (void) validate_jsonb_internal(data, schema, &errors);
 
     /* Remove trailing comma if present */
     if (errors.len > 1 && errors.data[errors.len - 1] == ',')
