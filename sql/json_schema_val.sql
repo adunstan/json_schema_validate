@@ -284,4 +284,41 @@ SELECT 'complex: user registration' AS test, jsonschema_is_valid(
     }'::jsonb
 ) AS result;
 
+--
+-- Compiled schema support
+--
+SELECT 'compile schema' AS test, jsonschema_compile('{"type": "object"}'::jsonb) IS NOT NULL AS result;
+
+-- Compiled schema validation
+WITH schema AS (
+    SELECT jsonschema_compile('{"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "pattern": "^[A-Z]"}}}'::jsonb) AS compiled
+)
+SELECT 'compiled is_valid: true' AS test, jsonschema_is_valid('{"name": "John"}'::jsonb, compiled) AS result FROM schema;
+
+WITH schema AS (
+    SELECT jsonschema_compile('{"type": "object", "required": ["name"]}'::jsonb) AS compiled
+)
+SELECT 'compiled is_valid: false' AS test, jsonschema_is_valid('{}'::jsonb, compiled) AS result FROM schema;
+
+WITH schema AS (
+    SELECT jsonschema_compile('{"type": "object", "required": ["id"]}'::jsonb) AS compiled
+)
+SELECT 'compiled validate' AS test, jsonschema_validate('{}'::jsonb, compiled) FROM schema;
+
+-- Compiled schema can be stored in tables
+CREATE TABLE test_schemas (name text PRIMARY KEY, schema jsonschema_compiled);
+INSERT INTO test_schemas VALUES ('user', jsonschema_compile('{"type": "object", "required": ["name"]}'::jsonb));
+SELECT 'stored compiled schema' AS test, jsonschema_is_valid('{"name": "test"}'::jsonb, schema) AS result FROM test_schemas WHERE name = 'user';
+DROP TABLE test_schemas;
+
+-- Compiled schema with SQL function wrapper for reuse
+CREATE FUNCTION get_user_schema() RETURNS jsonschema_compiled AS $$
+    SELECT jsonschema_compile('{"type": "object", "required": ["name", "email"]}'::jsonb);
+$$ LANGUAGE SQL IMMUTABLE;
+
+SELECT 'function wrapped schema: valid' AS test, jsonschema_is_valid('{"name": "John", "email": "john@test.com"}'::jsonb, get_user_schema()) AS result;
+SELECT 'function wrapped schema: invalid' AS test, jsonschema_is_valid('{"name": "John"}'::jsonb, get_user_schema()) AS result;
+
+DROP FUNCTION get_user_schema();
+
 DROP EXTENSION json_schema_val;

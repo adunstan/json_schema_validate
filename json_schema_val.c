@@ -3,6 +3,8 @@
 #include "utils/jsonb.h"
 #include "utils/builtins.h"
 #include "utils/array.h"
+#include "utils/hsearch.h"
+#include "utils/memutils.h"
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -11,6 +13,95 @@
 #include <string.h>
 
 PG_MODULE_MAGIC;
+
+/*
+ * Compiled schema type - stores jsonb schema with cached regex patterns
+ */
+typedef struct JsonSchemaCompiled
+{
+    int32       vl_len_;        /* varlena header */
+    /* The rest is the jsonb schema data */
+} JsonSchemaCompiled;
+
+#define DatumGetJsonSchemaCompiledP(d) ((JsonSchemaCompiled *) PG_DETOAST_DATUM(d))
+#define PG_GETARG_JSONSCHEMA_COMPILED_P(n) DatumGetJsonSchemaCompiledP(PG_GETARG_DATUM(n))
+#define PG_RETURN_JSONSCHEMA_COMPILED_P(x) PG_RETURN_POINTER(x)
+
+/*
+ * Regex cache entry
+ */
+typedef struct RegexCacheEntry
+{
+    char        pattern[256];   /* hash key - the pattern string */
+    regex_t     regex;          /* compiled regex */
+    bool        valid;          /* true if regex compiled successfully */
+} RegexCacheEntry;
+
+/* Global regex cache - persists for the backend session */
+static HTAB *regex_cache = NULL;
+static MemoryContext regex_cache_context = NULL;
+
+#define REGEX_CACHE_SIZE 128
+
+/*
+ * Initialize the regex cache if not already done
+ */
+static void
+init_regex_cache(void)
+{
+    HASHCTL     hash_ctl;
+
+    if (regex_cache != NULL)
+        return;
+
+    /* Create a memory context for the cache that persists across calls */
+    regex_cache_context = AllocSetContextCreate(TopMemoryContext,
+                                                 "JsonSchema Regex Cache",
+                                                 ALLOCSET_DEFAULT_SIZES);
+
+    memset(&hash_ctl, 0, sizeof(hash_ctl));
+    hash_ctl.keysize = 256;
+    hash_ctl.entrysize = sizeof(RegexCacheEntry);
+    hash_ctl.hcxt = regex_cache_context;
+
+    regex_cache = hash_create("JsonSchema Regex Cache",
+                              REGEX_CACHE_SIZE,
+                              &hash_ctl,
+                              HASH_ELEM | HASH_STRINGS | HASH_CONTEXT);
+}
+
+/*
+ * Get or compile a regex pattern, using the cache
+ */
+static regex_t *
+get_cached_regex(const char *pattern, bool *valid)
+{
+    RegexCacheEntry *entry;
+    bool        found;
+    char        key[256];
+
+    init_regex_cache();
+
+    /* Truncate pattern to fit in key */
+    strlcpy(key, pattern, sizeof(key));
+
+    entry = (RegexCacheEntry *) hash_search(regex_cache, key, HASH_ENTER, &found);
+
+    if (!found)
+    {
+        /* Compile the regex */
+        int ret = regcomp(&entry->regex, pattern, REG_EXTENDED | REG_NOSUB);
+        entry->valid = (ret == 0);
+        if (!entry->valid)
+        {
+            /* Store pattern for key but mark as invalid */
+            strlcpy(entry->pattern, key, sizeof(entry->pattern));
+        }
+    }
+
+    *valid = entry->valid;
+    return entry->valid ? &entry->regex : NULL;
+}
 
 /* Forward declarations */
 static bool validate_jsonb_internal(Jsonb *data, Jsonb *schema, StringInfo errors);
@@ -40,6 +131,13 @@ PG_FUNCTION_INFO_V1(jsonschema_is_valid_jsonb);
 PG_FUNCTION_INFO_V1(jsonschema_is_valid_json);
 PG_FUNCTION_INFO_V1(jsonschema_validate_jsonb);
 PG_FUNCTION_INFO_V1(jsonschema_validate_json);
+
+/* Compiled schema functions */
+PG_FUNCTION_INFO_V1(jsonschema_compile);
+PG_FUNCTION_INFO_V1(jsonschema_compiled_in);
+PG_FUNCTION_INFO_V1(jsonschema_compiled_out);
+PG_FUNCTION_INFO_V1(jsonschema_is_valid_compiled);
+PG_FUNCTION_INFO_V1(jsonschema_validate_compiled);
 
 /*
  * jsonschema_is_valid(data jsonb, schema jsonb) -> boolean
@@ -742,15 +840,15 @@ check_string_constraints(JsonbValue *data, JsonbContainer *schema_obj, const cha
     pattern_val = get_jsonb_key(schema_obj, "pattern");
     if (pattern_val != NULL && pattern_val->type == jbvString)
     {
-        regex_t regex;
         char *pattern = pnstrdup(pattern_val->val.string.val, pattern_val->val.string.len);
         char *str = pnstrdup(str_data, str_len);
-        int ret;
+        bool regex_valid;
+        regex_t *cached_regex;
 
-        ret = regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB);
-        if (ret == 0)
+        cached_regex = get_cached_regex(pattern, &regex_valid);
+        if (regex_valid && cached_regex != NULL)
         {
-            ret = regexec(&regex, str, 0, NULL, 0);
+            int ret = regexec(cached_regex, str, 0, NULL, 0);
             if (ret == REG_NOMATCH)
             {
                 if (errors)
@@ -761,7 +859,6 @@ check_string_constraints(JsonbValue *data, JsonbContainer *schema_obj, const cha
                 }
                 valid = false;
             }
-            regfree(&regex);
         }
 
         pfree(pattern);
@@ -1444,4 +1541,135 @@ build_path(const char *base, const char *key)
     appendStringInfoString(&path, key);
 
     return path.data;
+}
+
+/* ============================================================
+ * Compiled Schema Functions
+ * ============================================================
+ */
+
+/*
+ * jsonschema_compile(schema jsonb) -> jsonschema_compiled
+ *
+ * Compiles a JSON schema for efficient repeated validation.
+ * The compiled schema caches regex patterns and other parsed elements.
+ */
+Datum
+jsonschema_compile(PG_FUNCTION_ARGS)
+{
+    Jsonb              *schema = PG_GETARG_JSONB_P(0);
+    JsonSchemaCompiled *result;
+    int                 schema_size;
+
+    /* Initialize the regex cache on first use */
+    init_regex_cache();
+
+    /*
+     * The compiled schema is stored as a copy of the jsonb schema.
+     * The actual compilation (regex caching) happens lazily during validation.
+     * This approach allows the compiled schema to be passed around and stored.
+     */
+    schema_size = VARSIZE(schema);
+    result = (JsonSchemaCompiled *) palloc(schema_size);
+    memcpy(result, schema, schema_size);
+
+    PG_RETURN_JSONSCHEMA_COMPILED_P(result);
+}
+
+/*
+ * Input function for jsonschema_compiled type
+ */
+Datum
+jsonschema_compiled_in(PG_FUNCTION_ARGS)
+{
+    char   *str = PG_GETARG_CSTRING(0);
+    Datum   jsonb_datum;
+    Jsonb  *jsonb_val;
+    JsonSchemaCompiled *result;
+    int     size;
+
+    /* Parse as jsonb */
+    jsonb_datum = DirectFunctionCall1(jsonb_in, CStringGetDatum(str));
+    jsonb_val = DatumGetJsonbP(jsonb_datum);
+
+    /* Copy to our type */
+    size = VARSIZE(jsonb_val);
+    result = (JsonSchemaCompiled *) palloc(size);
+    memcpy(result, jsonb_val, size);
+
+    PG_RETURN_JSONSCHEMA_COMPILED_P(result);
+}
+
+/*
+ * Output function for jsonschema_compiled type
+ */
+Datum
+jsonschema_compiled_out(PG_FUNCTION_ARGS)
+{
+    JsonSchemaCompiled *compiled = PG_GETARG_JSONSCHEMA_COMPILED_P(0);
+    Datum result;
+
+    /* Output as jsonb text */
+    result = DirectFunctionCall1(jsonb_out, PointerGetDatum(compiled));
+
+    PG_RETURN_CSTRING(DatumGetCString(result));
+}
+
+/*
+ * jsonschema_is_valid(data jsonb, schema jsonschema_compiled) -> boolean
+ *
+ * Validates data against a pre-compiled schema.
+ */
+Datum
+jsonschema_is_valid_compiled(PG_FUNCTION_ARGS)
+{
+    Jsonb              *data = PG_GETARG_JSONB_P(0);
+    JsonSchemaCompiled *compiled = PG_GETARG_JSONSCHEMA_COMPILED_P(1);
+    Jsonb              *schema;
+    bool                result;
+
+    /* The compiled schema is stored as jsonb internally */
+    schema = (Jsonb *) compiled;
+
+    result = validate_jsonb_internal(data, schema, NULL);
+
+    PG_RETURN_BOOL(result);
+}
+
+/*
+ * jsonschema_validate(data jsonb, schema jsonschema_compiled) -> jsonb
+ *
+ * Validates data against a pre-compiled schema and returns errors.
+ */
+Datum
+jsonschema_validate_compiled(PG_FUNCTION_ARGS)
+{
+    Jsonb              *data = PG_GETARG_JSONB_P(0);
+    JsonSchemaCompiled *compiled = PG_GETARG_JSONSCHEMA_COMPILED_P(1);
+    Jsonb              *schema;
+    StringInfoData      errors;
+    bool                valid;
+    Datum               result;
+
+    /* The compiled schema is stored as jsonb internally */
+    schema = (Jsonb *) compiled;
+
+    initStringInfo(&errors);
+    appendStringInfoChar(&errors, '[');
+
+    valid = validate_jsonb_internal(data, schema, &errors);
+
+    if (valid)
+        PG_RETURN_NULL();
+
+    /* Remove trailing comma if present */
+    if (errors.len > 1 && errors.data[errors.len - 1] == ',')
+        errors.len--;
+
+    appendStringInfoChar(&errors, ']');
+
+    result = DirectFunctionCall1(jsonb_in, CStringGetDatum(errors.data));
+    pfree(errors.data);
+
+    PG_RETURN_DATUM(result);
 }

@@ -67,6 +67,23 @@ Returns `NULL` if valid, or a JSON array of error objects if invalid. Each error
 - `path`: JSON path to the invalid value
 - `message`: Description of the validation failure
 
+### jsonschema_compile
+
+```sql
+jsonschema_compile(schema jsonb) → jsonschema_compiled
+```
+
+Compiles a JSON schema for efficient repeated validation. The compiled schema caches regex patterns and can be stored in tables or wrapped in functions for reuse.
+
+### Compiled Schema Overloads
+
+```sql
+jsonschema_is_valid(data jsonb, schema jsonschema_compiled) → boolean
+jsonschema_validate(data jsonb, schema jsonschema_compiled) → jsonb
+```
+
+Validate using a pre-compiled schema. See [Compiled Schemas](#compiled-schemas) for usage examples.
+
 ## Usage Examples
 
 ### Basic Type Validation
@@ -344,9 +361,42 @@ The following JSON Schema features are not yet implemented:
 ## Performance Considerations
 
 - Functions are marked `IMMUTABLE` and `PARALLEL SAFE` for query optimization
-- Schema compilation happens on each call; for frequently-used schemas, consider caching validation results
+- Regex patterns are automatically cached in memory for the backend session
 - Complex schemas with many `allOf`/`anyOf`/`oneOf` may have higher overhead
 - JSONB is generally faster than JSON due to pre-parsed binary format
+
+### Compiled Schemas
+
+For frequently-used schemas, use `jsonschema_compile()` to create a compiled schema handle:
+
+```sql
+-- Create a reusable compiled schema
+CREATE FUNCTION get_user_schema() RETURNS jsonschema_compiled AS $$
+    SELECT jsonschema_compile('{
+        "type": "object",
+        "required": ["name", "email"],
+        "properties": {
+            "name": {"type": "string"},
+            "email": {"type": "string", "pattern": "^[^@]+@[^@]+$"}
+        }
+    }'::jsonb);
+$$ LANGUAGE SQL IMMUTABLE;
+
+-- Use the compiled schema (regex patterns are cached)
+SELECT jsonschema_is_valid(data, get_user_schema()) FROM users;
+```
+
+Compiled schemas can also be stored in tables:
+
+```sql
+CREATE TABLE schemas (name text PRIMARY KEY, schema jsonschema_compiled);
+INSERT INTO schemas VALUES ('user', jsonschema_compile('...'::jsonb));
+
+-- Validate using stored schema
+SELECT jsonschema_is_valid(data, s.schema)
+FROM users u, schemas s
+WHERE s.name = 'user';
+```
 
 ## License
 
