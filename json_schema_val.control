@@ -1,0 +1,4 @@
+comment = 'JSON Schema validation for PostgreSQL'
+default_version = '0.1.0'
+module_pathname = '$libdir/json_schema_val'
+relocatable = true

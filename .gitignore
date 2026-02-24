@@ -1,0 +1,13 @@
+# Build artifacts
+*.o
+*.so
+*.bc
+
+# pg_regress output
+results/
+regression.diffs
+regression.out
+
+# Editor files
+*~
+*.swp
