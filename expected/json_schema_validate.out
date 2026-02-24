@@ -1,77 +1,272 @@
--- json_schema_val extension tests
-
-CREATE EXTENSION json_schema_val;
-
+-- json_schema_validate extension tests
+CREATE EXTENSION json_schema_validate;
 --
 -- Type validation
 --
 SELECT 'type: object' AS test, jsonschema_is_valid('{}'::jsonb, '{"type": "object"}'::jsonb) AS result;
+     test     | result 
+--------------+--------
+ type: object | t
+(1 row)
+
 SELECT 'type: array' AS test, jsonschema_is_valid('[]'::jsonb, '{"type": "array"}'::jsonb) AS result;
+    test     | result 
+-------------+--------
+ type: array | t
+(1 row)
+
 SELECT 'type: string' AS test, jsonschema_is_valid('"hello"'::jsonb, '{"type": "string"}'::jsonb) AS result;
+     test     | result 
+--------------+--------
+ type: string | t
+(1 row)
+
 SELECT 'type: number' AS test, jsonschema_is_valid('42'::jsonb, '{"type": "number"}'::jsonb) AS result;
+     test     | result 
+--------------+--------
+ type: number | t
+(1 row)
+
 SELECT 'type: integer' AS test, jsonschema_is_valid('42'::jsonb, '{"type": "integer"}'::jsonb) AS result;
+     test      | result 
+---------------+--------
+ type: integer | t
+(1 row)
+
 SELECT 'type: boolean' AS test, jsonschema_is_valid('true'::jsonb, '{"type": "boolean"}'::jsonb) AS result;
+     test      | result 
+---------------+--------
+ type: boolean | t
+(1 row)
+
 SELECT 'type: null' AS test, jsonschema_is_valid('null'::jsonb, '{"type": "null"}'::jsonb) AS result;
+    test    | result 
+------------+--------
+ type: null | t
+(1 row)
 
 -- Type mismatches
 SELECT 'type mismatch: string vs object' AS test, jsonschema_is_valid('"hello"'::jsonb, '{"type": "object"}'::jsonb) AS result;
+              test               | result 
+---------------------------------+--------
+ type mismatch: string vs object | f
+(1 row)
+
 SELECT 'type mismatch: number vs string' AS test, jsonschema_is_valid('42'::jsonb, '{"type": "string"}'::jsonb) AS result;
+              test               | result 
+---------------------------------+--------
+ type mismatch: number vs string | f
+(1 row)
 
 --
 -- Enum validation
 --
 SELECT 'enum: valid' AS test, jsonschema_is_valid('"a"'::jsonb, '{"enum": ["a", "b", "c"]}'::jsonb) AS result;
+    test     | result 
+-------------+--------
+ enum: valid | t
+(1 row)
+
 SELECT 'enum: invalid' AS test, jsonschema_is_valid('"d"'::jsonb, '{"enum": ["a", "b", "c"]}'::jsonb) AS result;
+     test      | result 
+---------------+--------
+ enum: invalid | f
+(1 row)
+
 SELECT 'enum: number' AS test, jsonschema_is_valid('2'::jsonb, '{"enum": [1, 2, 3]}'::jsonb) AS result;
+     test     | result 
+--------------+--------
+ enum: number | t
+(1 row)
 
 --
 -- Const validation
 --
 SELECT 'const: match string' AS test, jsonschema_is_valid('"hello"'::jsonb, '{"const": "hello"}'::jsonb) AS result;
+        test         | result 
+---------------------+--------
+ const: match string | t
+(1 row)
+
 SELECT 'const: no match' AS test, jsonschema_is_valid('"world"'::jsonb, '{"const": "hello"}'::jsonb) AS result;
+      test       | result 
+-----------------+--------
+ const: no match | f
+(1 row)
+
 SELECT 'const: match number' AS test, jsonschema_is_valid('42'::jsonb, '{"const": 42}'::jsonb) AS result;
+        test         | result 
+---------------------+--------
+ const: match number | t
+(1 row)
+
 SELECT 'const: match boolean' AS test, jsonschema_is_valid('true'::jsonb, '{"const": true}'::jsonb) AS result;
+         test         | result 
+----------------------+--------
+ const: match boolean | t
+(1 row)
+
 SELECT 'const: match null' AS test, jsonschema_is_valid('null'::jsonb, '{"const": null}'::jsonb) AS result;
+       test        | result 
+-------------------+--------
+ const: match null | t
+(1 row)
 
 --
 -- String constraints
 --
 SELECT 'minLength: valid' AS test, jsonschema_is_valid('"hello"'::jsonb, '{"minLength": 3}'::jsonb) AS result;
+       test       | result 
+------------------+--------
+ minLength: valid | t
+(1 row)
+
 SELECT 'minLength: invalid' AS test, jsonschema_is_valid('"hi"'::jsonb, '{"minLength": 3}'::jsonb) AS result;
+        test        | result 
+--------------------+--------
+ minLength: invalid | f
+(1 row)
+
 SELECT 'maxLength: valid' AS test, jsonschema_is_valid('"hi"'::jsonb, '{"maxLength": 5}'::jsonb) AS result;
+       test       | result 
+------------------+--------
+ maxLength: valid | t
+(1 row)
+
 SELECT 'maxLength: invalid' AS test, jsonschema_is_valid('"hello world"'::jsonb, '{"maxLength": 5}'::jsonb) AS result;
+        test        | result 
+--------------------+--------
+ maxLength: invalid | f
+(1 row)
+
 SELECT 'pattern: valid' AS test, jsonschema_is_valid('"abc123"'::jsonb, '{"pattern": "^[a-z]+[0-9]+$"}'::jsonb) AS result;
+      test      | result 
+----------------+--------
+ pattern: valid | t
+(1 row)
+
 SELECT 'pattern: invalid' AS test, jsonschema_is_valid('"123abc"'::jsonb, '{"pattern": "^[a-z]+[0-9]+$"}'::jsonb) AS result;
+       test       | result 
+------------------+--------
+ pattern: invalid | f
+(1 row)
 
 --
 -- Number constraints
 --
 SELECT 'minimum: valid' AS test, jsonschema_is_valid('10'::jsonb, '{"minimum": 5}'::jsonb) AS result;
+      test      | result 
+----------------+--------
+ minimum: valid | t
+(1 row)
+
 SELECT 'minimum: invalid' AS test, jsonschema_is_valid('3'::jsonb, '{"minimum": 5}'::jsonb) AS result;
+       test       | result 
+------------------+--------
+ minimum: invalid | f
+(1 row)
+
 SELECT 'minimum: equal' AS test, jsonschema_is_valid('5'::jsonb, '{"minimum": 5}'::jsonb) AS result;
+      test      | result 
+----------------+--------
+ minimum: equal | t
+(1 row)
+
 SELECT 'maximum: valid' AS test, jsonschema_is_valid('3'::jsonb, '{"maximum": 5}'::jsonb) AS result;
+      test      | result 
+----------------+--------
+ maximum: valid | t
+(1 row)
+
 SELECT 'maximum: invalid' AS test, jsonschema_is_valid('10'::jsonb, '{"maximum": 5}'::jsonb) AS result;
+       test       | result 
+------------------+--------
+ maximum: invalid | f
+(1 row)
+
 SELECT 'exclusiveMinimum: valid' AS test, jsonschema_is_valid('6'::jsonb, '{"exclusiveMinimum": 5}'::jsonb) AS result;
+          test           | result 
+-------------------------+--------
+ exclusiveMinimum: valid | t
+(1 row)
+
 SELECT 'exclusiveMinimum: invalid' AS test, jsonschema_is_valid('5'::jsonb, '{"exclusiveMinimum": 5}'::jsonb) AS result;
+           test            | result 
+---------------------------+--------
+ exclusiveMinimum: invalid | f
+(1 row)
+
 SELECT 'exclusiveMaximum: valid' AS test, jsonschema_is_valid('4'::jsonb, '{"exclusiveMaximum": 5}'::jsonb) AS result;
+          test           | result 
+-------------------------+--------
+ exclusiveMaximum: valid | t
+(1 row)
+
 SELECT 'exclusiveMaximum: invalid' AS test, jsonschema_is_valid('5'::jsonb, '{"exclusiveMaximum": 5}'::jsonb) AS result;
+           test            | result 
+---------------------------+--------
+ exclusiveMaximum: invalid | f
+(1 row)
 
 --
 -- Array constraints
 --
 SELECT 'minItems: valid' AS test, jsonschema_is_valid('[1, 2, 3]'::jsonb, '{"minItems": 2}'::jsonb) AS result;
+      test       | result 
+-----------------+--------
+ minItems: valid | t
+(1 row)
+
 SELECT 'minItems: invalid' AS test, jsonschema_is_valid('[1]'::jsonb, '{"minItems": 2}'::jsonb) AS result;
+       test        | result 
+-------------------+--------
+ minItems: invalid | f
+(1 row)
+
 SELECT 'maxItems: valid' AS test, jsonschema_is_valid('[1, 2]'::jsonb, '{"maxItems": 3}'::jsonb) AS result;
+      test       | result 
+-----------------+--------
+ maxItems: valid | t
+(1 row)
+
 SELECT 'maxItems: invalid' AS test, jsonschema_is_valid('[1, 2, 3, 4]'::jsonb, '{"maxItems": 3}'::jsonb) AS result;
+       test        | result 
+-------------------+--------
+ maxItems: invalid | f
+(1 row)
+
 SELECT 'items: valid' AS test, jsonschema_is_valid('[1, 2, 3]'::jsonb, '{"items": {"type": "number"}}'::jsonb) AS result;
+     test     | result 
+--------------+--------
+ items: valid | t
+(1 row)
+
 SELECT 'items: invalid' AS test, jsonschema_is_valid('[1, "two", 3]'::jsonb, '{"items": {"type": "number"}}'::jsonb) AS result;
+      test      | result 
+----------------+--------
+ items: invalid | f
+(1 row)
 
 --
 -- Object constraints: required
 --
 SELECT 'required: valid' AS test, jsonschema_is_valid('{"a": 1, "b": 2}'::jsonb, '{"required": ["a", "b"]}'::jsonb) AS result;
+      test       | result 
+-----------------+--------
+ required: valid | t
+(1 row)
+
 SELECT 'required: missing one' AS test, jsonschema_is_valid('{"a": 1}'::jsonb, '{"required": ["a", "b"]}'::jsonb) AS result;
+         test          | result 
+-----------------------+--------
+ required: missing one | f
+(1 row)
+
 SELECT 'required: missing all' AS test, jsonschema_is_valid('{}'::jsonb, '{"required": ["a", "b"]}'::jsonb) AS result;
+         test          | result 
+-----------------------+--------
+ required: missing all | f
+(1 row)
 
 --
 -- Object constraints: properties
@@ -80,10 +275,19 @@ SELECT 'properties: valid' AS test, jsonschema_is_valid(
     '{"name": "John", "age": 30}'::jsonb,
     '{"properties": {"name": {"type": "string"}, "age": {"type": "number"}}}'::jsonb
 ) AS result;
+       test        | result 
+-------------------+--------
+ properties: valid | t
+(1 row)
+
 SELECT 'properties: invalid type' AS test, jsonschema_is_valid(
     '{"name": "John", "age": "thirty"}'::jsonb,
     '{"properties": {"name": {"type": "string"}, "age": {"type": "number"}}}'::jsonb
 ) AS result;
+           test           | result 
+--------------------------+--------
+ properties: invalid type | f
+(1 row)
 
 --
 -- Object constraints: additionalProperties
@@ -92,18 +296,37 @@ SELECT 'additionalProperties false: valid' AS test, jsonschema_is_valid(
     '{"name": "John"}'::jsonb,
     '{"properties": {"name": {"type": "string"}}, "additionalProperties": false}'::jsonb
 ) AS result;
+               test                | result 
+-----------------------------------+--------
+ additionalProperties false: valid | t
+(1 row)
+
 SELECT 'additionalProperties false: invalid' AS test, jsonschema_is_valid(
     '{"name": "John", "extra": 1}'::jsonb,
     '{"properties": {"name": {"type": "string"}}, "additionalProperties": false}'::jsonb
 ) AS result;
+                test                 | result 
+-------------------------------------+--------
+ additionalProperties false: invalid | f
+(1 row)
+
 SELECT 'additionalProperties schema: valid' AS test, jsonschema_is_valid(
     '{"name": "John", "extra": 123}'::jsonb,
     '{"properties": {"name": {"type": "string"}}, "additionalProperties": {"type": "number"}}'::jsonb
 ) AS result;
+                test                | result 
+------------------------------------+--------
+ additionalProperties schema: valid | t
+(1 row)
+
 SELECT 'additionalProperties schema: invalid' AS test, jsonschema_is_valid(
     '{"name": "John", "extra": "not a number"}'::jsonb,
     '{"properties": {"name": {"type": "string"}}, "additionalProperties": {"type": "number"}}'::jsonb
 ) AS result;
+                 test                 | result 
+--------------------------------------+--------
+ additionalProperties schema: invalid | f
+(1 row)
 
 --
 -- Object constraints: propertyNames
@@ -112,18 +335,37 @@ SELECT 'propertyNames: valid' AS test, jsonschema_is_valid(
     '{"foo": 1, "bar": 2}'::jsonb,
     '{"propertyNames": {"pattern": "^[a-z]+$"}}'::jsonb
 ) AS result;
+         test         | result 
+----------------------+--------
+ propertyNames: valid | t
+(1 row)
+
 SELECT 'propertyNames: invalid' AS test, jsonschema_is_valid(
     '{"Foo": 1, "bar": 2}'::jsonb,
     '{"propertyNames": {"pattern": "^[a-z]+$"}}'::jsonb
 ) AS result;
+          test          | result 
+------------------------+--------
+ propertyNames: invalid | f
+(1 row)
+
 SELECT 'propertyNames minLength: valid' AS test, jsonschema_is_valid(
     '{"abc": 1}'::jsonb,
     '{"propertyNames": {"minLength": 2}}'::jsonb
 ) AS result;
+              test              | result 
+--------------------------------+--------
+ propertyNames minLength: valid | t
+(1 row)
+
 SELECT 'propertyNames minLength: invalid' AS test, jsonschema_is_valid(
     '{"a": 1}'::jsonb,
     '{"propertyNames": {"minLength": 2}}'::jsonb
 ) AS result;
+               test               | result 
+----------------------------------+--------
+ propertyNames minLength: invalid | f
+(1 row)
 
 --
 -- Schema composition: allOf
@@ -132,17 +374,40 @@ SELECT 'allOf: valid' AS test, jsonschema_is_valid(
     '{"a": 1, "b": 2}'::jsonb,
     '{"allOf": [{"required": ["a"]}, {"required": ["b"]}]}'::jsonb
 ) AS result;
+     test     | result 
+--------------+--------
+ allOf: valid | t
+(1 row)
+
 SELECT 'allOf: invalid' AS test, jsonschema_is_valid(
     '{"a": 1}'::jsonb,
     '{"allOf": [{"required": ["a"]}, {"required": ["b"]}]}'::jsonb
 ) AS result;
+      test      | result 
+----------------+--------
+ allOf: invalid | f
+(1 row)
 
 --
 -- Schema composition: anyOf
 --
 SELECT 'anyOf: match first' AS test, jsonschema_is_valid('"hello"'::jsonb, '{"anyOf": [{"type": "string"}, {"type": "number"}]}'::jsonb) AS result;
+        test        | result 
+--------------------+--------
+ anyOf: match first | t
+(1 row)
+
 SELECT 'anyOf: match second' AS test, jsonschema_is_valid('42'::jsonb, '{"anyOf": [{"type": "string"}, {"type": "number"}]}'::jsonb) AS result;
+        test         | result 
+---------------------+--------
+ anyOf: match second | t
+(1 row)
+
 SELECT 'anyOf: no match' AS test, jsonschema_is_valid('true'::jsonb, '{"anyOf": [{"type": "string"}, {"type": "number"}]}'::jsonb) AS result;
+      test       | result 
+-----------------+--------
+ anyOf: no match | f
+(1 row)
 
 --
 -- Schema composition: oneOf
@@ -151,20 +416,43 @@ SELECT 'oneOf: exactly one' AS test, jsonschema_is_valid(
     '5'::jsonb,
     '{"oneOf": [{"type": "number", "minimum": 0}, {"type": "number", "maximum": 3}]}'::jsonb
 ) AS result;
+        test        | result 
+--------------------+--------
+ oneOf: exactly one | t
+(1 row)
+
 SELECT 'oneOf: matches both' AS test, jsonschema_is_valid(
     '2'::jsonb,
     '{"oneOf": [{"type": "number", "minimum": 0}, {"type": "number", "maximum": 3}]}'::jsonb
 ) AS result;
+        test         | result 
+---------------------+--------
+ oneOf: matches both | f
+(1 row)
+
 SELECT 'oneOf: matches none' AS test, jsonschema_is_valid(
     '"hello"'::jsonb,
     '{"oneOf": [{"type": "number"}, {"type": "boolean"}]}'::jsonb
 ) AS result;
+        test         | result 
+---------------------+--------
+ oneOf: matches none | f
+(1 row)
 
 --
 -- Schema composition: not
 --
 SELECT 'not: valid' AS test, jsonschema_is_valid('"hello"'::jsonb, '{"not": {"type": "number"}}'::jsonb) AS result;
+    test    | result 
+------------+--------
+ not: valid | t
+(1 row)
+
 SELECT 'not: invalid' AS test, jsonschema_is_valid('42'::jsonb, '{"not": {"type": "number"}}'::jsonb) AS result;
+     test     | result 
+--------------+--------
+ not: invalid | f
+(1 row)
 
 --
 -- $ref and $defs
@@ -173,14 +461,28 @@ SELECT '$ref with $defs: valid' AS test, jsonschema_is_valid(
     '{"name": "John"}'::jsonb,
     '{"$defs": {"nameType": {"type": "string"}}, "properties": {"name": {"$ref": "#/$defs/nameType"}}}'::jsonb
 ) AS result;
+          test          | result 
+------------------------+--------
+ $ref with $defs: valid | t
+(1 row)
+
 SELECT '$ref with $defs: invalid' AS test, jsonschema_is_valid(
     '{"name": 123}'::jsonb,
     '{"$defs": {"nameType": {"type": "string"}}, "properties": {"name": {"$ref": "#/$defs/nameType"}}}'::jsonb
 ) AS result;
+           test           | result 
+--------------------------+--------
+ $ref with $defs: invalid | f
+(1 row)
+
 SELECT '$ref with definitions: valid' AS test, jsonschema_is_valid(
     '{"user": {"name": "John"}}'::jsonb,
     '{"definitions": {"person": {"type": "object", "required": ["name"]}}, "properties": {"user": {"$ref": "#/definitions/person"}}}'::jsonb
 ) AS result;
+             test             | result 
+------------------------------+--------
+ $ref with definitions: valid | t
+(1 row)
 
 --
 -- Nested validation
@@ -204,6 +506,10 @@ SELECT 'nested objects: valid' AS test, jsonschema_is_valid(
         }
     }'::jsonb
 ) AS result;
+         test          | result 
+-----------------------+--------
+ nested objects: valid | t
+(1 row)
 
 SELECT 'nested arrays: valid' AS test, jsonschema_is_valid(
     '{"items": [{"id": 1}, {"id": 2}]}'::jsonb,
@@ -220,29 +526,70 @@ SELECT 'nested arrays: valid' AS test, jsonschema_is_valid(
         }
     }'::jsonb
 ) AS result;
+         test         | result 
+----------------------+--------
+ nested arrays: valid | t
+(1 row)
 
 --
 -- Error reporting
 --
 SELECT 'errors: type mismatch' AS test, jsonschema_validate('{"age": "thirty"}'::jsonb, '{"properties": {"age": {"type": "number"}}}'::jsonb);
+         test          |                         jsonschema_validate                         
+-----------------------+---------------------------------------------------------------------
+ errors: type mismatch | [{"path": "age", "message": "Expected type number but got string"}]
+(1 row)
+
 SELECT 'errors: missing required' AS test, jsonschema_validate('{}'::jsonb, '{"required": ["id"]}'::jsonb);
+           test           |                    jsonschema_validate                     
+--------------------------+------------------------------------------------------------
+ errors: missing required | [{"path": "", "message": "Missing required property: id"}]
+(1 row)
+
 SELECT 'errors: additional property' AS test, jsonschema_validate('{"a": 1, "b": 2}'::jsonb, '{"properties": {"a": {}}, "additionalProperties": false}'::jsonb);
+            test             |                         jsonschema_validate                         
+-----------------------------+---------------------------------------------------------------------
+ errors: additional property | [{"path": "", "message": "Additional property 'b' is not allowed"}]
+(1 row)
+
 SELECT 'errors: multiple' AS test, jsonschema_validate(
     '{"name": 123, "age": "old"}'::jsonb,
     '{"properties": {"name": {"type": "string"}, "age": {"type": "number"}}}'::jsonb
 );
+       test       |                                                           jsonschema_validate                                                           
+------------------+-----------------------------------------------------------------------------------------------------------------------------------------
+ errors: multiple | [{"path": "age", "message": "Expected type number but got string"}, {"path": "name", "message": "Expected type string but got number"}]
+(1 row)
 
 --
 -- json type (not just jsonb)
 --
 SELECT 'json type: is_valid' AS test, jsonschema_is_valid('{"a": 1}'::json, '{"type": "object"}'::json) AS result;
+        test         | result 
+---------------------+--------
+ json type: is_valid | t
+(1 row)
+
 SELECT 'json type: validate' AS test, jsonschema_validate('{}'::json, '{"required": ["x"]}'::json);
+        test         |                  jsonschema_validate                   
+---------------------+--------------------------------------------------------
+ json type: validate | [{"path":"","message":"Missing required property: x"}]
+(1 row)
 
 --
 -- Boolean schemas
 --
 SELECT 'boolean schema true' AS test, jsonschema_is_valid('{"anything": "goes"}'::jsonb, 'true'::jsonb) AS result;
+        test         | result 
+---------------------+--------
+ boolean schema true | t
+(1 row)
+
 SELECT 'boolean schema false' AS test, jsonschema_is_valid('{"anything": "goes"}'::jsonb, 'false'::jsonb) AS result;
+         test         | result 
+----------------------+--------
+ boolean schema false | f
+(1 row)
 
 --
 -- Complex real-world example
@@ -283,42 +630,73 @@ SELECT 'complex: user registration' AS test, jsonschema_is_valid(
         "additionalProperties": false
     }'::jsonb
 ) AS result;
+            test            | result 
+----------------------------+--------
+ complex: user registration | t
+(1 row)
 
 --
 -- Compiled schema support
 --
 SELECT 'compile schema' AS test, jsonschema_compile('{"type": "object"}'::jsonb) IS NOT NULL AS result;
+      test      | result 
+----------------+--------
+ compile schema | t
+(1 row)
 
 -- Compiled schema validation
 WITH schema AS (
     SELECT jsonschema_compile('{"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "pattern": "^[A-Z]"}}}'::jsonb) AS compiled
 )
 SELECT 'compiled is_valid: true' AS test, jsonschema_is_valid('{"name": "John"}'::jsonb, compiled) AS result FROM schema;
+          test           | result 
+-------------------------+--------
+ compiled is_valid: true | t
+(1 row)
 
 WITH schema AS (
     SELECT jsonschema_compile('{"type": "object", "required": ["name"]}'::jsonb) AS compiled
 )
 SELECT 'compiled is_valid: false' AS test, jsonschema_is_valid('{}'::jsonb, compiled) AS result FROM schema;
+           test           | result 
+--------------------------+--------
+ compiled is_valid: false | f
+(1 row)
 
 WITH schema AS (
     SELECT jsonschema_compile('{"type": "object", "required": ["id"]}'::jsonb) AS compiled
 )
 SELECT 'compiled validate' AS test, jsonschema_validate('{}'::jsonb, compiled) FROM schema;
+       test        |                    jsonschema_validate                     
+-------------------+------------------------------------------------------------
+ compiled validate | [{"path": "", "message": "Missing required property: id"}]
+(1 row)
 
 -- Compiled schema can be stored in tables
 CREATE TABLE test_schemas (name text PRIMARY KEY, schema jsonschema_compiled);
 INSERT INTO test_schemas VALUES ('user', jsonschema_compile('{"type": "object", "required": ["name"]}'::jsonb));
 SELECT 'stored compiled schema' AS test, jsonschema_is_valid('{"name": "test"}'::jsonb, schema) AS result FROM test_schemas WHERE name = 'user';
-DROP TABLE test_schemas;
+          test          | result 
+------------------------+--------
+ stored compiled schema | t
+(1 row)
 
+DROP TABLE test_schemas;
 -- Compiled schema with SQL function wrapper for reuse
 CREATE FUNCTION get_user_schema() RETURNS jsonschema_compiled AS $$
     SELECT jsonschema_compile('{"type": "object", "required": ["name", "email"]}'::jsonb);
 $$ LANGUAGE SQL IMMUTABLE;
-
 SELECT 'function wrapped schema: valid' AS test, jsonschema_is_valid('{"name": "John", "email": "john@test.com"}'::jsonb, get_user_schema()) AS result;
+              test              | result 
+--------------------------------+--------
+ function wrapped schema: valid | t
+(1 row)
+
 SELECT 'function wrapped schema: invalid' AS test, jsonschema_is_valid('{"name": "John"}'::jsonb, get_user_schema()) AS result;
+               test               | result 
+----------------------------------+--------
+ function wrapped schema: invalid | f
+(1 row)
 
 DROP FUNCTION get_user_schema();
-
-DROP EXTENSION json_schema_val;
+DROP EXTENSION json_schema_validate;

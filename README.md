@@ -1,10 +1,10 @@
-# json_schema_val
+# json_schema_validate
 
 A PostgreSQL extension for validating JSON/JSONB data against JSON Schema.
 
 ## Overview
 
-`json_schema_val` provides functions to validate `json` and `jsonb` data against [JSON Schema](https://json-schema.org/) specifications directly within PostgreSQL. This enables schema-based data validation in CHECK constraints, triggers, queries, and stored procedures.
+`json_schema_validate` provides functions to validate `json` and `jsonb` data against [JSON Schema](https://json-schema.org/) specifications directly within PostgreSQL. This enables schema-based data validation in CHECK constraints, triggers, queries, and stored procedures.
 
 ## Features
 
@@ -27,7 +27,7 @@ A PostgreSQL extension for validating JSON/JSONB data against JSON Schema.
 
 ```bash
 # Clone or download the source
-cd json_schema_val
+cd json_schema_validate
 
 # Build (adjust PG_CONFIG path as needed)
 make PG_CONFIG=/path/to/pg_config
@@ -42,7 +42,7 @@ make install PG_CONFIG=/path/to/pg_config
 ### Enable in Database
 
 ```sql
-CREATE EXTENSION json_schema_val;
+CREATE EXTENSION json_schema_validate;
 ```
 
 ## Functions

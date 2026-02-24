@@ -1,5 +1,5 @@
 -- JSON Schema validation extension for PostgreSQL
-\echo Use "CREATE EXTENSION json_schema_val" to load this file. \quit
+\echo Use "CREATE EXTENSION json_schema_validate" to load this file. \quit
 
 -- Validate jsonb data against a JSON Schema
 -- Returns true if valid, false otherwise
