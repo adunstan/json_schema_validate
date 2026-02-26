@@ -1,3 +1,30 @@
+/*-------------------------------------------------------------------------
+ *
+ * json_schema_validate.c
+ *    JSON Schema validation for PostgreSQL
+ *
+ * This extension provides functions to validate JSON/JSONB data against
+ * JSON Schema specifications. It supports a significant subset of JSON
+ * Schema draft-07, including:
+ *
+ *   - Type validation (string, number, integer, boolean, null, array, object)
+ *   - String constraints (minLength, maxLength, pattern)
+ *   - Numeric constraints (minimum, maximum, exclusiveMinimum, exclusiveMaximum,
+ *     multipleOf)
+ *   - Array constraints (minItems, maxItems, uniqueItems, items, contains)
+ *   - Object constraints (required, properties, additionalProperties,
+ *     propertyNames, minProperties, maxProperties, patternProperties)
+ *   - Schema composition (allOf, anyOf, oneOf, not)
+ *   - Conditional schemas (if/then/else)
+ *   - References ($ref with JSON Pointer)
+ *   - Enumeration and const
+ *
+ * IDENTIFICATION
+ *    json_schema_validate.c
+ *
+ *-------------------------------------------------------------------------
+ */
+
 #include "postgres.h"
 #include "fmgr.h"
 #include "utils/jsonb.h"
