@@ -321,4 +321,122 @@ SELECT 'function wrapped schema: invalid' AS test, jsonschema_is_valid('{"name":
 
 DROP FUNCTION get_user_schema();
 
+--
+-- multipleOf
+--
+SELECT 'multipleOf: valid (10 is multiple of 5)' AS test, jsonschema_is_valid('10'::jsonb, '{"multipleOf": 5}'::jsonb) AS result;
+SELECT 'multipleOf: invalid (7 is not multiple of 3)' AS test, jsonschema_is_valid('7'::jsonb, '{"multipleOf": 3}'::jsonb) AS result;
+SELECT 'multipleOf: valid decimal (4.5 is multiple of 1.5)' AS test, jsonschema_is_valid('4.5'::jsonb, '{"multipleOf": 1.5}'::jsonb) AS result;
+SELECT 'multipleOf: zero is multiple of anything' AS test, jsonschema_is_valid('0'::jsonb, '{"multipleOf": 7}'::jsonb) AS result;
+
+--
+-- uniqueItems
+--
+SELECT 'uniqueItems: valid (all unique)' AS test, jsonschema_is_valid('[1, 2, 3]'::jsonb, '{"uniqueItems": true}'::jsonb) AS result;
+SELECT 'uniqueItems: invalid (has duplicates)' AS test, jsonschema_is_valid('[1, 2, 2, 3]'::jsonb, '{"uniqueItems": true}'::jsonb) AS result;
+SELECT 'uniqueItems: valid strings' AS test, jsonschema_is_valid('["a", "b", "c"]'::jsonb, '{"uniqueItems": true}'::jsonb) AS result;
+SELECT 'uniqueItems: invalid duplicate strings' AS test, jsonschema_is_valid('["a", "b", "a"]'::jsonb, '{"uniqueItems": true}'::jsonb) AS result;
+SELECT 'uniqueItems: false allows duplicates' AS test, jsonschema_is_valid('[1, 1, 1]'::jsonb, '{"uniqueItems": false}'::jsonb) AS result;
+
+--
+-- contains
+--
+SELECT 'contains: valid (has number)' AS test, jsonschema_is_valid('[1, "a", true]'::jsonb, '{"contains": {"type": "number"}}'::jsonb) AS result;
+SELECT 'contains: invalid (no number)' AS test, jsonschema_is_valid('["a", "b", true]'::jsonb, '{"contains": {"type": "number"}}'::jsonb) AS result;
+SELECT 'contains: valid (multiple matches)' AS test, jsonschema_is_valid('[1, 2, 3]'::jsonb, '{"contains": {"type": "number"}}'::jsonb) AS result;
+
+--
+-- minContains and maxContains
+--
+SELECT 'minContains: valid (has 2 numbers, min 2)' AS test, jsonschema_is_valid('[1, 2, "a"]'::jsonb, '{"contains": {"type": "number"}, "minContains": 2}'::jsonb) AS result;
+SELECT 'minContains: invalid (has 1 number, min 2)' AS test, jsonschema_is_valid('[1, "a", "b"]'::jsonb, '{"contains": {"type": "number"}, "minContains": 2}'::jsonb) AS result;
+SELECT 'maxContains: valid (has 2 numbers, max 3)' AS test, jsonschema_is_valid('[1, 2, "a"]'::jsonb, '{"contains": {"type": "number"}, "maxContains": 3}'::jsonb) AS result;
+SELECT 'maxContains: invalid (has 4 numbers, max 2)' AS test, jsonschema_is_valid('[1, 2, 3, 4]'::jsonb, '{"contains": {"type": "number"}, "maxContains": 2}'::jsonb) AS result;
+SELECT 'minContains 0: valid even with no matches' AS test, jsonschema_is_valid('["a", "b"]'::jsonb, '{"contains": {"type": "number"}, "minContains": 0}'::jsonb) AS result;
+
+--
+-- minProperties and maxProperties
+--
+SELECT 'minProperties: valid' AS test, jsonschema_is_valid('{"a": 1, "b": 2}'::jsonb, '{"minProperties": 2}'::jsonb) AS result;
+SELECT 'minProperties: invalid' AS test, jsonschema_is_valid('{"a": 1}'::jsonb, '{"minProperties": 2}'::jsonb) AS result;
+SELECT 'maxProperties: valid' AS test, jsonschema_is_valid('{"a": 1, "b": 2}'::jsonb, '{"maxProperties": 3}'::jsonb) AS result;
+SELECT 'maxProperties: invalid' AS test, jsonschema_is_valid('{"a": 1, "b": 2, "c": 3, "d": 4}'::jsonb, '{"maxProperties": 3}'::jsonb) AS result;
+SELECT 'minProperties + maxProperties: valid' AS test, jsonschema_is_valid('{"a": 1, "b": 2}'::jsonb, '{"minProperties": 1, "maxProperties": 3}'::jsonb) AS result;
+
+--
+-- if/then/else
+--
+SELECT 'if/then: valid (if matches, then validates)' AS test, jsonschema_is_valid(
+    '{"type": "string", "value": "hello"}'::jsonb,
+    '{"if": {"properties": {"type": {"const": "string"}}}, "then": {"properties": {"value": {"type": "string"}}}}'::jsonb
+) AS result;
+SELECT 'if/then: valid (if not matches, then skipped)' AS test, jsonschema_is_valid(
+    '{"type": "number", "value": 42}'::jsonb,
+    '{"if": {"properties": {"type": {"const": "string"}}}, "then": {"properties": {"value": {"type": "string"}}}}'::jsonb
+) AS result;
+SELECT 'if/then: invalid (if matches, then fails)' AS test, jsonschema_is_valid(
+    '{"type": "string", "value": 123}'::jsonb,
+    '{"if": {"properties": {"type": {"const": "string"}}}, "then": {"properties": {"value": {"type": "string"}}}}'::jsonb
+) AS result;
+SELECT 'if/else: valid (if not matches, else validates)' AS test, jsonschema_is_valid(
+    '{"type": "number", "value": 42}'::jsonb,
+    '{"if": {"properties": {"type": {"const": "string"}}}, "else": {"properties": {"value": {"type": "number"}}}}'::jsonb
+) AS result;
+SELECT 'if/else: invalid (if not matches, else fails)' AS test, jsonschema_is_valid(
+    '{"type": "number", "value": "hello"}'::jsonb,
+    '{"if": {"properties": {"type": {"const": "string"}}}, "else": {"properties": {"value": {"type": "number"}}}}'::jsonb
+) AS result;
+SELECT 'if/then/else: then branch' AS test, jsonschema_is_valid(
+    '10'::jsonb,
+    '{"if": {"minimum": 5}, "then": {"maximum": 20}, "else": {"minimum": -10}}'::jsonb
+) AS result;
+SELECT 'if/then/else: else branch' AS test, jsonschema_is_valid(
+    '2'::jsonb,
+    '{"if": {"minimum": 5}, "then": {"maximum": 20}, "else": {"minimum": -10}}'::jsonb
+) AS result;
+
+--
+-- Type arrays
+--
+SELECT 'type array: string or null (string)' AS test, jsonschema_is_valid('"hello"'::jsonb, '{"type": ["string", "null"]}'::jsonb) AS result;
+SELECT 'type array: string or null (null)' AS test, jsonschema_is_valid('null'::jsonb, '{"type": ["string", "null"]}'::jsonb) AS result;
+SELECT 'type array: string or null (number fails)' AS test, jsonschema_is_valid('42'::jsonb, '{"type": ["string", "null"]}'::jsonb) AS result;
+SELECT 'type array: multiple types' AS test, jsonschema_is_valid('true'::jsonb, '{"type": ["string", "number", "boolean"]}'::jsonb) AS result;
+SELECT 'type array: integer or string' AS test, jsonschema_is_valid('42'::jsonb, '{"type": ["integer", "string"]}'::jsonb) AS result;
+
+--
+-- Integer type (strict check)
+--
+SELECT 'integer: valid whole number' AS test, jsonschema_is_valid('42'::jsonb, '{"type": "integer"}'::jsonb) AS result;
+SELECT 'integer: invalid decimal' AS test, jsonschema_is_valid('42.5'::jsonb, '{"type": "integer"}'::jsonb) AS result;
+SELECT 'integer: valid negative' AS test, jsonschema_is_valid('-10'::jsonb, '{"type": "integer"}'::jsonb) AS result;
+SELECT 'integer: valid zero' AS test, jsonschema_is_valid('0'::jsonb, '{"type": "integer"}'::jsonb) AS result;
+
+--
+-- Format validation
+--
+SELECT 'format date-time: valid' AS test, jsonschema_is_valid('"2023-12-25T10:30:00Z"'::jsonb, '{"format": "date-time"}'::jsonb) AS result;
+SELECT 'format date-time: valid with offset' AS test, jsonschema_is_valid('"2023-12-25T10:30:00+05:30"'::jsonb, '{"format": "date-time"}'::jsonb) AS result;
+SELECT 'format date-time: invalid' AS test, jsonschema_is_valid('"not a date"'::jsonb, '{"format": "date-time"}'::jsonb) AS result;
+SELECT 'format date: valid' AS test, jsonschema_is_valid('"2023-12-25"'::jsonb, '{"format": "date"}'::jsonb) AS result;
+SELECT 'format date: invalid' AS test, jsonschema_is_valid('"25-12-2023"'::jsonb, '{"format": "date"}'::jsonb) AS result;
+SELECT 'format time: valid' AS test, jsonschema_is_valid('"10:30:00"'::jsonb, '{"format": "time"}'::jsonb) AS result;
+SELECT 'format time: valid with zone' AS test, jsonschema_is_valid('"10:30:00Z"'::jsonb, '{"format": "time"}'::jsonb) AS result;
+SELECT 'format time: invalid' AS test, jsonschema_is_valid('"25:00:00"'::jsonb, '{"format": "time"}'::jsonb) AS result;
+SELECT 'format email: valid' AS test, jsonschema_is_valid('"user@example.com"'::jsonb, '{"format": "email"}'::jsonb) AS result;
+SELECT 'format email: invalid' AS test, jsonschema_is_valid('"not an email"'::jsonb, '{"format": "email"}'::jsonb) AS result;
+SELECT 'format hostname: valid' AS test, jsonschema_is_valid('"example.com"'::jsonb, '{"format": "hostname"}'::jsonb) AS result;
+SELECT 'format hostname: invalid' AS test, jsonschema_is_valid('"-invalid.com"'::jsonb, '{"format": "hostname"}'::jsonb) AS result;
+SELECT 'format ipv4: valid' AS test, jsonschema_is_valid('"192.168.1.1"'::jsonb, '{"format": "ipv4"}'::jsonb) AS result;
+SELECT 'format ipv4: invalid' AS test, jsonschema_is_valid('"256.1.1.1"'::jsonb, '{"format": "ipv4"}'::jsonb) AS result;
+SELECT 'format ipv6: valid' AS test, jsonschema_is_valid('"2001:0db8:85a3:0000:0000:8a2e:0370:7334"'::jsonb, '{"format": "ipv6"}'::jsonb) AS result;
+SELECT 'format ipv6: valid shorthand' AS test, jsonschema_is_valid('"::1"'::jsonb, '{"format": "ipv6"}'::jsonb) AS result;
+SELECT 'format uri: valid' AS test, jsonschema_is_valid('"https://example.com/path"'::jsonb, '{"format": "uri"}'::jsonb) AS result;
+SELECT 'format uri: invalid' AS test, jsonschema_is_valid('"not a uri"'::jsonb, '{"format": "uri"}'::jsonb) AS result;
+SELECT 'format uuid: valid' AS test, jsonschema_is_valid('"550e8400-e29b-41d4-a716-446655440000"'::jsonb, '{"format": "uuid"}'::jsonb) AS result;
+SELECT 'format uuid: invalid' AS test, jsonschema_is_valid('"not-a-uuid"'::jsonb, '{"format": "uuid"}'::jsonb) AS result;
+SELECT 'format regex: valid' AS test, jsonschema_is_valid('"^[a-z]+$"'::jsonb, '{"format": "regex"}'::jsonb) AS result;
+SELECT 'format regex: invalid' AS test, jsonschema_is_valid('"[invalid"'::jsonb, '{"format": "regex"}'::jsonb) AS result;
+SELECT 'format unknown: ignored' AS test, jsonschema_is_valid('"anything"'::jsonb, '{"format": "unknown-format"}'::jsonb) AS result;
+
 DROP EXTENSION json_schema_validate;

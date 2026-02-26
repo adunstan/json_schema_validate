@@ -290,7 +290,7 @@ SELECT jsonschema_is_valid(
 
 | Keyword | Description |
 |---------|-------------|
-| `type` | Validates value type (object, array, string, number, integer, boolean, null) |
+| `type` | Validates value type (object, array, string, number, integer, boolean, null). Supports type arrays, e.g., `["string", "null"]` |
 | `enum` | Value must be one of the specified values |
 | `const` | Value must exactly match |
 
@@ -301,6 +301,7 @@ SELECT jsonschema_is_valid(
 | `minLength` | Minimum string length |
 | `maxLength` | Maximum string length |
 | `pattern` | String must match regex pattern |
+| `format` | Semantic format validation (see [Format Validation](#format-validation)) |
 
 ### Number Keywords
 
@@ -310,6 +311,7 @@ SELECT jsonschema_is_valid(
 | `maximum` | Value <= maximum |
 | `exclusiveMinimum` | Value > exclusiveMinimum |
 | `exclusiveMaximum` | Value < exclusiveMaximum |
+| `multipleOf` | Value must be divisible by this number |
 
 ### Array Keywords
 
@@ -318,6 +320,10 @@ SELECT jsonschema_is_valid(
 | `minItems` | Minimum array length |
 | `maxItems` | Maximum array length |
 | `items` | Schema for array items |
+| `uniqueItems` | When `true`, all array items must be unique |
+| `contains` | At least one item must match this schema |
+| `minContains` | Minimum number of items matching `contains` (default: 1) |
+| `maxContains` | Maximum number of items matching `contains` |
 
 ### Object Keywords
 
@@ -327,6 +333,9 @@ SELECT jsonschema_is_valid(
 | `properties` | Schema for each property |
 | `additionalProperties` | Schema for unlisted properties, or `false` to reject |
 | `propertyNames` | Schema that property names must match |
+| `minProperties` | Minimum number of properties |
+| `maxProperties` | Maximum number of properties |
+| `patternProperties` | Schemas for properties matching regex patterns |
 
 ### Schema Composition
 
@@ -337,6 +346,14 @@ SELECT jsonschema_is_valid(
 | `oneOf` | Must match EXACTLY ONE schema in array |
 | `not` | Must NOT match the schema |
 
+### Conditional Keywords
+
+| Keyword | Description |
+|---------|-------------|
+| `if` | Schema to test against |
+| `then` | Schema to apply if `if` succeeds |
+| `else` | Schema to apply if `if` fails |
+
 ### References
 
 | Keyword | Description |
@@ -345,20 +362,34 @@ SELECT jsonschema_is_valid(
 | `$defs` | Schema definitions for reuse |
 | `definitions` | Alias for `$defs` (older style) |
 
+### Format Validation
+
+The `format` keyword validates strings against common formats:
+
+| Format | Description |
+|--------|-------------|
+| `date-time` | ISO 8601 date-time (e.g., `2023-12-25T10:30:00Z`) |
+| `date` | ISO 8601 date (e.g., `2023-12-25`) |
+| `time` | ISO 8601 time (e.g., `10:30:00`) |
+| `email` | Email address |
+| `hostname` | Internet hostname |
+| `ipv4` | IPv4 address |
+| `ipv6` | IPv6 address |
+| `uri` | URI with scheme |
+| `uuid` | UUID (e.g., `550e8400-e29b-41d4-a716-446655440000`) |
+| `regex` | Valid regular expression |
+
+Unknown formats are ignored per JSON Schema specification.
+
 ## Limitations
 
 The following JSON Schema features are not yet implemented:
 
-- `format` (semantic validation like email, uri, date)
-- `multipleOf` (number divisibility)
-- `uniqueItems` (array uniqueness)
-- `contains`, `minContains`, `maxContains`
 - `prefixItems` / tuple validation
-- `dependentRequired`, `dependentSchemas`
-- `if` / `then` / `else`
-- `patternProperties` (partial support in additionalProperties logic)
+- `dependentRequired`, `dependentSchemas`, `dependencies`
+- `unevaluatedProperties`, `unevaluatedItems`
 - External `$ref` (only local `#/...` references supported)
-- `$id`, `$anchor`
+- `$id`, `$anchor`, `$dynamicRef`
 
 ## Performance Considerations
 

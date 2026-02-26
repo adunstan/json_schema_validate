@@ -28,13 +28,17 @@
  *   - String constraints (minLength, maxLength, pattern)
  *   - Numeric constraints (minimum, maximum, exclusiveMinimum, exclusiveMaximum,
  *     multipleOf)
- *   - Array constraints (minItems, maxItems, uniqueItems, items, contains)
+ *   - Array constraints (minItems, maxItems, uniqueItems, items, contains,
+ *     minContains, maxContains)
  *   - Object constraints (required, properties, additionalProperties,
  *     propertyNames, minProperties, maxProperties, patternProperties)
  *   - Schema composition (allOf, anyOf, oneOf, not)
  *   - Conditional schemas (if/then/else)
  *   - References ($ref with JSON Pointer)
  *   - Enumeration and const
+ *   - Type arrays (e.g., "type": ["string", "null"])
+ *   - Format validation (date-time, date, time, email, hostname, ipv4, ipv6,
+ *     uri, uuid, regex)
  *
  * IDENTIFICATION
  *    json_schema_validate.c
@@ -166,6 +170,9 @@ static bool check_all_of(JsonbValue *data, JsonbValue *all_of_val, const char *p
 static bool check_any_of(JsonbValue *data, JsonbValue *any_of_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
 static bool check_one_of(JsonbValue *data, JsonbValue *one_of_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
 static bool check_not(JsonbValue *data, JsonbValue *not_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_if_then_else(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_object_size_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors);
+static bool check_format(JsonbValue *data, JsonbValue *format_val, const char *path, StringInfo errors);
 static JsonbValue *resolve_ref(const char *ref, JsonbContainer *root_schema);
 static bool jsonb_values_equal(JsonbValue *a, JsonbValue *b);
 static void append_error(StringInfo errors, const char *path, const char *message);
@@ -460,12 +467,25 @@ validate_value_with_root(JsonbValue *data, JsonbValue *schema, const char *path,
             valid = false;
     }
 
+    /* Check if/then/else */
+    if (!check_if_then_else(data, schema_obj, path, errors, root_schema))
+        valid = false;
+
     /* Type-specific validations */
     if (data->type == jbvString ||
         (data->type == jbvBinary && JsonContainerIsScalar(data->val.binary.data)))
     {
+        JsonbValue *format_val;
+
         if (!check_string_constraints(data, schema_obj, path, errors))
             valid = false;
+
+        format_val = get_jsonb_key(schema_obj, "format");
+        if (format_val != NULL)
+        {
+            if (!check_format(data, format_val, path, errors))
+                valid = false;
+        }
     }
 
     if (data->type == jbvNumeric)
@@ -500,6 +520,9 @@ validate_value_with_root(JsonbValue *data, JsonbValue *schema, const char *path,
             if (!check_property_names(data, prop_names_val, path, errors, root_schema))
                 valid = false;
         }
+
+        if (!check_object_size_constraints(data, schema_obj, path, errors))
+            valid = false;
     }
 
     /* Array validations */
@@ -571,32 +594,73 @@ jsonb_type_name(JsonbValue *v)
 }
 
 /*
- * Check if data matches the expected type
+ * Check if data matches a single type string
  */
 static bool
-check_type(JsonbValue *data, JsonbValue *type_val)
+check_single_type(JsonbValue *data, const char *type_str, int type_len)
 {
-    const char *actual;
-    int expected_len;
-
-    if (type_val->type != jbvString)
-        return true; /* Invalid type specification, skip check */
-
-    expected_len = type_val->val.string.len;
-    actual = jsonb_type_name(data);
+    const char *actual = jsonb_type_name(data);
 
     /* Handle "integer" as a special case of "number" */
-    if (expected_len == 7 && strncmp(type_val->val.string.val, "integer", 7) == 0)
+    if (type_len == 7 && strncmp(type_str, "integer", 7) == 0)
     {
         if (strcmp(actual, "number") != 0)
             return false;
-        /* Could add integer check here */
+        /* Check if it's actually an integer (no fractional part) */
+        if (data->type == jbvNumeric)
+        {
+            Numeric num = data->val.numeric;
+            Numeric floor_val;
+            floor_val = DatumGetNumeric(DirectFunctionCall1(numeric_floor,
+                NumericGetDatum(num)));
+            return DatumGetBool(DirectFunctionCall2(numeric_eq,
+                NumericGetDatum(num),
+                NumericGetDatum(floor_val)));
+        }
         return true;
     }
 
     /* Compare type names - must match exactly */
-    return (expected_len == (int)strlen(actual) &&
-            strncmp(type_val->val.string.val, actual, expected_len) == 0);
+    return (type_len == (int)strlen(actual) &&
+            strncmp(type_str, actual, type_len) == 0);
+}
+
+/*
+ * Check if data matches the expected type (string or array of strings)
+ */
+static bool
+check_type(JsonbValue *data, JsonbValue *type_val)
+{
+    /* Handle type as a string */
+    if (type_val->type == jbvString)
+    {
+        return check_single_type(data, type_val->val.string.val, type_val->val.string.len);
+    }
+
+    /* Handle type as an array of strings */
+    if (type_val->type == jbvBinary)
+    {
+        JsonbContainer *type_arr = type_val->val.binary.data;
+        JsonbIterator *it;
+        JsonbValue v;
+        JsonbIteratorToken tok;
+
+        if (!JsonContainerIsArray(type_arr))
+            return true; /* Invalid type specification */
+
+        it = JsonbIteratorInit(type_arr);
+        while ((tok = JsonbIteratorNext(&it, &v, true)) != WJB_DONE)
+        {
+            if (tok == WJB_ELEM && v.type == jbvString)
+            {
+                if (check_single_type(data, v.val.string.val, v.val.string.len))
+                    return true; /* Match found */
+            }
+        }
+        return false; /* No type in array matched */
+    }
+
+    return true; /* Invalid type specification, skip check */
 }
 
 /*
@@ -905,12 +969,12 @@ check_string_constraints(JsonbValue *data, JsonbContainer *schema_obj, const cha
 }
 
 /*
- * Check number constraints (minimum, maximum, exclusiveMinimum, exclusiveMaximum)
+ * Check number constraints (minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf)
  */
 static bool
 check_number_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors)
 {
-    JsonbValue *min_val, *max_val, *exmin_val, *exmax_val;
+    JsonbValue *min_val, *max_val, *exmin_val, *exmax_val, *multiple_of_val;
     Numeric data_num;
     bool valid = true;
 
@@ -971,17 +1035,40 @@ check_number_constraints(JsonbValue *data, JsonbContainer *schema_obj, const cha
         }
     }
 
+    multiple_of_val = get_jsonb_key(schema_obj, "multipleOf");
+    if (multiple_of_val != NULL && multiple_of_val->type == jbvNumeric)
+    {
+        /* Check if data_num / multipleOf is an integer (remainder is 0) */
+        Numeric divisor = multiple_of_val->val.numeric;
+        Numeric remainder;
+
+        remainder = DatumGetNumeric(DirectFunctionCall2(numeric_mod,
+                NumericGetDatum(data_num),
+                NumericGetDatum(divisor)));
+
+        /* Check if remainder is zero */
+        if (!DatumGetBool(DirectFunctionCall2(numeric_eq,
+                NumericGetDatum(remainder),
+                DirectFunctionCall1(int4_numeric, Int32GetDatum(0)))))
+        {
+            if (errors)
+                append_error(errors, path, "Value is not a multiple of multipleOf");
+            valid = false;
+        }
+    }
+
     return valid;
 }
 
 /*
- * Check array constraints (minItems, maxItems, items)
+ * Check array constraints (minItems, maxItems, uniqueItems, items, contains, minContains, maxContains)
  */
 static bool
 check_array_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema)
 {
     JsonbContainer *data_arr;
     JsonbValue *minitems_val, *maxitems_val, *items_val;
+    JsonbValue *unique_val, *contains_val, *min_contains_val, *max_contains_val;
     int count;
     bool valid = true;
 
@@ -1031,6 +1118,52 @@ check_array_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char
         }
     }
 
+    /* Check uniqueItems */
+    unique_val = get_jsonb_key(schema_obj, "uniqueItems");
+    if (unique_val != NULL && unique_val->type == jbvBool && unique_val->val.boolean)
+    {
+        /* Check for duplicate items using O(n^2) comparison */
+        JsonbIterator *it1;
+        JsonbValue elem1;
+        JsonbIteratorToken tok1;
+        int idx1 = 0;
+        bool has_duplicate = false;
+
+        it1 = JsonbIteratorInit(data_arr);
+        while ((tok1 = JsonbIteratorNext(&it1, &elem1, true)) != WJB_DONE && !has_duplicate)
+        {
+            if (tok1 == WJB_ELEM)
+            {
+                JsonbIterator *it2;
+                JsonbValue elem2;
+                JsonbIteratorToken tok2;
+                int idx2 = 0;
+
+                it2 = JsonbIteratorInit(data_arr);
+                while ((tok2 = JsonbIteratorNext(&it2, &elem2, true)) != WJB_DONE)
+                {
+                    if (tok2 == WJB_ELEM)
+                    {
+                        if (idx2 > idx1 && jsonb_values_equal(&elem1, &elem2))
+                        {
+                            has_duplicate = true;
+                            break;
+                        }
+                        idx2++;
+                    }
+                }
+                idx1++;
+            }
+        }
+
+        if (has_duplicate)
+        {
+            if (errors)
+                append_error(errors, path, "Array items are not unique");
+            valid = false;
+        }
+    }
+
     /* Check items schema */
     items_val = get_jsonb_key(schema_obj, "items");
     if (items_val != NULL && items_val->type == jbvBinary)
@@ -1057,6 +1190,68 @@ check_array_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char
                 pfree(elem_path);
                 idx++;
             }
+        }
+    }
+
+    /* Check contains, minContains, maxContains */
+    contains_val = get_jsonb_key(schema_obj, "contains");
+    if (contains_val != NULL)
+    {
+        JsonbIterator *it;
+        JsonbValue elem;
+        JsonbIteratorToken tok;
+        int contains_count = 0;
+        int min_contains = 1;  /* Default: at least 1 match required */
+        int max_contains = -1; /* Default: no upper limit */
+
+        min_contains_val = get_jsonb_key(schema_obj, "minContains");
+        if (min_contains_val != NULL && min_contains_val->type == jbvNumeric)
+        {
+            min_contains = DatumGetInt32(DirectFunctionCall1(numeric_int4,
+                NumericGetDatum(min_contains_val->val.numeric)));
+        }
+
+        max_contains_val = get_jsonb_key(schema_obj, "maxContains");
+        if (max_contains_val != NULL && max_contains_val->type == jbvNumeric)
+        {
+            max_contains = DatumGetInt32(DirectFunctionCall1(numeric_int4,
+                NumericGetDatum(max_contains_val->val.numeric)));
+        }
+
+        /* Count how many items match the contains schema */
+        it = JsonbIteratorInit(data_arr);
+        while ((tok = JsonbIteratorNext(&it, &elem, true)) != WJB_DONE)
+        {
+            if (tok == WJB_ELEM)
+            {
+                if (validate_value_with_root(&elem, contains_val, path, NULL, root_schema))
+                    contains_count++;
+            }
+        }
+
+        if (contains_count < min_contains)
+        {
+            if (errors)
+            {
+                char msg[256];
+                if (min_contains == 1)
+                    snprintf(msg, sizeof(msg), "Array does not contain any item matching the contains schema");
+                else
+                    snprintf(msg, sizeof(msg), "Array contains %d matching items, minimum is %d", contains_count, min_contains);
+                append_error(errors, path, msg);
+            }
+            valid = false;
+        }
+
+        if (max_contains >= 0 && contains_count > max_contains)
+        {
+            if (errors)
+            {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "Array contains %d matching items, maximum is %d", contains_count, max_contains);
+                append_error(errors, path, msg);
+            }
+            valid = false;
         }
     }
 
@@ -1414,6 +1609,318 @@ check_not(JsonbValue *data, JsonbValue *not_val, const char *path, StringInfo er
     }
 
     return true;
+}
+
+/*
+ * Check if/then/else conditional schema
+ */
+static bool
+check_if_then_else(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema)
+{
+    JsonbValue *if_val;
+    JsonbValue *then_val;
+    JsonbValue *else_val;
+    bool if_result;
+
+    if_val = get_jsonb_key(schema_obj, "if");
+    if (if_val == NULL)
+        return true; /* No if/then/else to check */
+
+    then_val = get_jsonb_key(schema_obj, "then");
+    else_val = get_jsonb_key(schema_obj, "else");
+
+    /* If neither then nor else is present, if alone has no effect */
+    if (then_val == NULL && else_val == NULL)
+        return true;
+
+    /* Evaluate the "if" schema (without collecting errors) */
+    if_result = validate_value_with_root(data, if_val, path, NULL, root_schema);
+
+    if (if_result)
+    {
+        /* "if" matched, validate against "then" if present */
+        if (then_val != NULL)
+        {
+            if (!validate_value_with_root(data, then_val, path, errors, root_schema))
+                return false;
+        }
+    }
+    else
+    {
+        /* "if" did not match, validate against "else" if present */
+        if (else_val != NULL)
+        {
+            if (!validate_value_with_root(data, else_val, path, errors, root_schema))
+                return false;
+        }
+    }
+
+    return true;
+}
+
+/*
+ * Check object size constraints (minProperties, maxProperties)
+ */
+static bool
+check_object_size_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors)
+{
+    JsonbContainer *data_obj;
+    JsonbValue *min_props_val, *max_props_val;
+    int prop_count;
+    bool valid = true;
+
+    if (data->type == jbvBinary)
+        data_obj = data->val.binary.data;
+    else
+        return true;
+
+    if (!JsonContainerIsObject(data_obj))
+        return true;
+
+    prop_count = JsonContainerSize(data_obj);
+
+    min_props_val = get_jsonb_key(schema_obj, "minProperties");
+    if (min_props_val != NULL && min_props_val->type == jbvNumeric)
+    {
+        int min_props = DatumGetInt32(DirectFunctionCall1(numeric_int4,
+            NumericGetDatum(min_props_val->val.numeric)));
+        if (prop_count < min_props)
+        {
+            if (errors)
+            {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "Object has %d properties, minimum is %d", prop_count, min_props);
+                append_error(errors, path, msg);
+            }
+            valid = false;
+        }
+    }
+
+    max_props_val = get_jsonb_key(schema_obj, "maxProperties");
+    if (max_props_val != NULL && max_props_val->type == jbvNumeric)
+    {
+        int max_props = DatumGetInt32(DirectFunctionCall1(numeric_int4,
+            NumericGetDatum(max_props_val->val.numeric)));
+        if (prop_count > max_props)
+        {
+            if (errors)
+            {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "Object has %d properties, maximum is %d", prop_count, max_props);
+                append_error(errors, path, msg);
+            }
+            valid = false;
+        }
+    }
+
+    return valid;
+}
+
+/*
+ * Check format validation for strings
+ * Supports: date-time, date, time, email, hostname, ipv4, ipv6, uri, uuid, regex
+ */
+static bool
+check_format(JsonbValue *data, JsonbValue *format_val, const char *path, StringInfo errors)
+{
+    char *format_str;
+    char *str_data = NULL;
+    int str_len = 0;
+    char *str = NULL;
+    bool valid = true;
+
+    if (format_val == NULL || format_val->type != jbvString)
+        return true;
+
+    /* Get the actual string value */
+    if (data->type == jbvString)
+    {
+        str_data = data->val.string.val;
+        str_len = data->val.string.len;
+    }
+    else if (data->type == jbvBinary && JsonContainerIsScalar(data->val.binary.data))
+    {
+        JsonbValue scalar;
+        JsonbExtractScalar(data->val.binary.data, &scalar);
+        if (scalar.type == jbvString)
+        {
+            str_data = scalar.val.string.val;
+            str_len = scalar.val.string.len;
+        }
+    }
+
+    if (str_data == NULL)
+        return true;
+
+    str = pnstrdup(str_data, str_len);
+    format_str = pnstrdup(format_val->val.string.val, format_val->val.string.len);
+
+    /* Validate based on format */
+    if (strcmp(format_str, "date-time") == 0)
+    {
+        /* ISO 8601 date-time: YYYY-MM-DDTHH:MM:SS with optional timezone */
+        regex_t regex;
+        const char *pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})?$";
+        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
+        {
+            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
+            {
+                if (errors)
+                    append_error(errors, path, "String does not match date-time format");
+                valid = false;
+            }
+            regfree(&regex);
+        }
+    }
+    else if (strcmp(format_str, "date") == 0)
+    {
+        /* ISO 8601 date: YYYY-MM-DD */
+        regex_t regex;
+        const char *pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$";
+        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
+        {
+            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
+            {
+                if (errors)
+                    append_error(errors, path, "String does not match date format");
+                valid = false;
+            }
+            regfree(&regex);
+        }
+    }
+    else if (strcmp(format_str, "time") == 0)
+    {
+        /* ISO 8601 time: HH:MM:SS with optional fractional seconds and timezone */
+        regex_t regex;
+        const char *pattern = "^([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})?$";
+        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
+        {
+            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
+            {
+                if (errors)
+                    append_error(errors, path, "String does not match time format");
+                valid = false;
+            }
+            regfree(&regex);
+        }
+    }
+    else if (strcmp(format_str, "email") == 0)
+    {
+        /* Basic email validation - POSIX ERE doesn't support \s, use explicit chars */
+        regex_t regex;
+        const char *pattern = "^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$";
+        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
+        {
+            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
+            {
+                if (errors)
+                    append_error(errors, path, "String does not match email format");
+                valid = false;
+            }
+            regfree(&regex);
+        }
+    }
+    else if (strcmp(format_str, "hostname") == 0)
+    {
+        /* Hostname validation */
+        regex_t regex;
+        const char *pattern = "^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$";
+        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
+        {
+            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
+            {
+                if (errors)
+                    append_error(errors, path, "String does not match hostname format");
+                valid = false;
+            }
+            regfree(&regex);
+        }
+    }
+    else if (strcmp(format_str, "ipv4") == 0)
+    {
+        /* IPv4 address validation */
+        regex_t regex;
+        const char *pattern = "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$";
+        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
+        {
+            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
+            {
+                if (errors)
+                    append_error(errors, path, "String does not match IPv4 format");
+                valid = false;
+            }
+            regfree(&regex);
+        }
+    }
+    else if (strcmp(format_str, "ipv6") == 0)
+    {
+        /* Simplified IPv6 validation (full addresses only, no :: shorthand for simplicity) */
+        regex_t regex;
+        const char *pattern = "^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::$|^(([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4})?::([0-9a-fA-F]{1,4}(:([0-9a-fA-F]{1,4}))*)?$";
+        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
+        {
+            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
+            {
+                if (errors)
+                    append_error(errors, path, "String does not match IPv6 format");
+                valid = false;
+            }
+            regfree(&regex);
+        }
+    }
+    else if (strcmp(format_str, "uri") == 0)
+    {
+        /* Basic URI validation */
+        regex_t regex;
+        const char *pattern = "^[a-zA-Z][a-zA-Z0-9+.-]*:.+$";
+        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
+        {
+            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
+            {
+                if (errors)
+                    append_error(errors, path, "String does not match URI format");
+                valid = false;
+            }
+            regfree(&regex);
+        }
+    }
+    else if (strcmp(format_str, "uuid") == 0)
+    {
+        /* UUID validation */
+        regex_t regex;
+        const char *pattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
+        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
+        {
+            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
+            {
+                if (errors)
+                    append_error(errors, path, "String does not match UUID format");
+                valid = false;
+            }
+            regfree(&regex);
+        }
+    }
+    else if (strcmp(format_str, "regex") == 0)
+    {
+        /* Validate that the string is a valid regex */
+        regex_t regex;
+        if (regcomp(&regex, str, REG_EXTENDED | REG_NOSUB) != 0)
+        {
+            if (errors)
+                append_error(errors, path, "String is not a valid regular expression");
+            valid = false;
+        }
+        else
+        {
+            regfree(&regex);
+        }
+    }
+    /* Unknown formats are ignored per JSON Schema spec */
+
+    pfree(str);
+    pfree(format_str);
+
+    return valid;
 }
 
 /*
