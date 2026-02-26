@@ -177,6 +177,8 @@ static JsonbValue *resolve_ref(const char *ref, JsonbContainer *root_schema);
 static bool jsonb_values_equal(JsonbValue *a, JsonbValue *b);
 static void append_error(StringInfo errors, const char *path, const char *message);
 static char *build_path(const char *base, const char *key);
+static bool extract_string_from_jsonb(JsonbValue *data, char **str_data, int *str_len);
+static char *validate_and_build_errors(Jsonb *data, Jsonb *schema);
 
 PG_FUNCTION_INFO_V1(jsonschema_is_valid_jsonb);
 PG_FUNCTION_INFO_V1(jsonschema_is_valid_json);
@@ -234,16 +236,13 @@ jsonschema_is_valid_json(PG_FUNCTION_ARGS)
 }
 
 /*
- * jsonschema_validate(data jsonb, schema jsonb) -> jsonb
- * Returns NULL if valid, or array of errors if invalid.
+ * Validate data against schema and return JSON array of errors as a string.
+ * Caller is responsible for freeing the returned string.
  */
-Datum
-jsonschema_validate_jsonb(PG_FUNCTION_ARGS)
+static char *
+validate_and_build_errors(Jsonb *data, Jsonb *schema)
 {
-    Jsonb *data = PG_GETARG_JSONB_P(0);
-    Jsonb *schema = PG_GETARG_JSONB_P(1);
     StringInfoData errors;
-    Datum result;
 
     initStringInfo(&errors);
     appendStringInfoChar(&errors, '[');
@@ -256,8 +255,24 @@ jsonschema_validate_jsonb(PG_FUNCTION_ARGS)
 
     appendStringInfoChar(&errors, ']');
 
-    result = DirectFunctionCall1(jsonb_in, CStringGetDatum(errors.data));
-    pfree(errors.data);
+    return errors.data;
+}
+
+/*
+ * jsonschema_validate(data jsonb, schema jsonb) -> jsonb
+ * Returns NULL if valid, or array of errors if invalid.
+ */
+Datum
+jsonschema_validate_jsonb(PG_FUNCTION_ARGS)
+{
+    Jsonb *data = PG_GETARG_JSONB_P(0);
+    Jsonb *schema = PG_GETARG_JSONB_P(1);
+    char *errors;
+    Datum result;
+
+    errors = validate_and_build_errors(data, schema);
+    result = DirectFunctionCall1(jsonb_in, CStringGetDatum(errors));
+    pfree(errors);
 
     PG_RETURN_DATUM(result);
 }
@@ -274,7 +289,7 @@ jsonschema_validate_json(PG_FUNCTION_ARGS)
     Jsonb *schema;
     Datum data_jsonb;
     Datum schema_jsonb;
-    StringInfoData errors;
+    char *errors;
 
     /* Convert json to jsonb */
     data_jsonb = DirectFunctionCall1(jsonb_in,
@@ -285,18 +300,9 @@ jsonschema_validate_json(PG_FUNCTION_ARGS)
     data = DatumGetJsonbP(data_jsonb);
     schema = DatumGetJsonbP(schema_jsonb);
 
-    initStringInfo(&errors);
-    appendStringInfoChar(&errors, '[');
+    errors = validate_and_build_errors(data, schema);
 
-    (void) validate_jsonb_internal(data, schema, &errors);
-
-    /* Remove trailing comma if present */
-    if (errors.len > 1 && errors.data[errors.len - 1] == ',')
-        errors.len--;
-
-    appendStringInfoChar(&errors, ']');
-
-    PG_RETURN_TEXT_P(cstring_to_text(errors.data));
+    PG_RETURN_TEXT_P(cstring_to_text(errors));
 }
 
 /*
@@ -870,6 +876,34 @@ check_property_names(JsonbValue *data, JsonbValue *prop_names_schema, const char
 }
 
 /*
+ * Extract string value from a JsonbValue
+ * Returns true if a string was found, false otherwise.
+ * Sets str_data and str_len to point to the string data (not copied).
+ */
+static bool
+extract_string_from_jsonb(JsonbValue *data, char **str_data, int *str_len)
+{
+    if (data->type == jbvString)
+    {
+        *str_data = data->val.string.val;
+        *str_len = data->val.string.len;
+        return true;
+    }
+    else if (data->type == jbvBinary && JsonContainerIsScalar(data->val.binary.data))
+    {
+        JsonbValue scalar;
+        JsonbExtractScalar(data->val.binary.data, &scalar);
+        if (scalar.type == jbvString)
+        {
+            *str_data = scalar.val.string.val;
+            *str_len = scalar.val.string.len;
+            return true;
+        }
+    }
+    return false;
+}
+
+/*
  * Check string constraints (minLength, maxLength, pattern)
  */
 static bool
@@ -881,24 +915,7 @@ check_string_constraints(JsonbValue *data, JsonbContainer *schema_obj, const cha
     char *str_data = NULL;
     int str_len = 0;
 
-    /* Get the actual string value */
-    if (data->type == jbvString)
-    {
-        str_data = data->val.string.val;
-        str_len = data->val.string.len;
-    }
-    else if (data->type == jbvBinary && JsonContainerIsScalar(data->val.binary.data))
-    {
-        JsonbValue scalar;
-        JsonbExtractScalar(data->val.binary.data, &scalar);
-        if (scalar.type == jbvString)
-        {
-            str_data = scalar.val.string.val;
-            str_len = scalar.val.string.len;
-        }
-    }
-
-    if (str_data == NULL)
+    if (!extract_string_from_jsonb(data, &str_data, &str_len))
         return true;
 
     len = str_len;
@@ -1717,6 +1734,57 @@ check_object_size_constraints(JsonbValue *data, JsonbContainer *schema_obj, cons
 }
 
 /*
+ * Format validation table entry
+ */
+typedef struct FormatEntry
+{
+    const char *name;
+    const char *pattern;
+    const char *error_msg;
+} FormatEntry;
+
+/* Format validation patterns */
+static const FormatEntry format_table[] = {
+    /* ISO 8601 date-time: YYYY-MM-DDTHH:MM:SS with optional timezone */
+    {"date-time",
+     "^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})?$",
+     "String does not match date-time format"},
+    /* ISO 8601 date: YYYY-MM-DD */
+    {"date",
+     "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+     "String does not match date format"},
+    /* ISO 8601 time: HH:MM:SS with optional fractional seconds and timezone */
+    {"time",
+     "^([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})?$",
+     "String does not match time format"},
+    /* Basic email validation */
+    {"email",
+     "^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$",
+     "String does not match email format"},
+    /* Hostname validation */
+    {"hostname",
+     "^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$",
+     "String does not match hostname format"},
+    /* IPv4 address validation */
+    {"ipv4",
+     "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$",
+     "String does not match IPv4 format"},
+    /* IPv6 validation with :: shorthand support */
+    {"ipv6",
+     "^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::$|^(([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4})?::([0-9a-fA-F]{1,4}(:([0-9a-fA-F]{1,4}))*)?$",
+     "String does not match IPv6 format"},
+    /* Basic URI validation */
+    {"uri",
+     "^[a-zA-Z][a-zA-Z0-9+.-]*:.+$",
+     "String does not match URI format"},
+    /* UUID validation */
+    {"uuid",
+     "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+     "String does not match UUID format"},
+    {NULL, NULL, NULL}  /* sentinel */
+};
+
+/*
  * Check format validation for strings
  * Supports: date-time, date, time, email, hostname, ipv4, ipv6, uri, uuid, regex
  */
@@ -1732,177 +1800,15 @@ check_format(JsonbValue *data, JsonbValue *format_val, const char *path, StringI
     if (format_val == NULL || format_val->type != jbvString)
         return true;
 
-    /* Get the actual string value */
-    if (data->type == jbvString)
-    {
-        str_data = data->val.string.val;
-        str_len = data->val.string.len;
-    }
-    else if (data->type == jbvBinary && JsonContainerIsScalar(data->val.binary.data))
-    {
-        JsonbValue scalar;
-        JsonbExtractScalar(data->val.binary.data, &scalar);
-        if (scalar.type == jbvString)
-        {
-            str_data = scalar.val.string.val;
-            str_len = scalar.val.string.len;
-        }
-    }
-
-    if (str_data == NULL)
+    if (!extract_string_from_jsonb(data, &str_data, &str_len))
         return true;
 
     str = pnstrdup(str_data, str_len);
     format_str = pnstrdup(format_val->val.string.val, format_val->val.string.len);
 
-    /* Validate based on format */
-    if (strcmp(format_str, "date-time") == 0)
+    /* Special case: "regex" format validates that string is a valid regex */
+    if (strcmp(format_str, "regex") == 0)
     {
-        /* ISO 8601 date-time: YYYY-MM-DDTHH:MM:SS with optional timezone */
-        regex_t regex;
-        const char *pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})?$";
-        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
-        {
-            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
-            {
-                if (errors)
-                    append_error(errors, path, "String does not match date-time format");
-                valid = false;
-            }
-            regfree(&regex);
-        }
-    }
-    else if (strcmp(format_str, "date") == 0)
-    {
-        /* ISO 8601 date: YYYY-MM-DD */
-        regex_t regex;
-        const char *pattern = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$";
-        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
-        {
-            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
-            {
-                if (errors)
-                    append_error(errors, path, "String does not match date format");
-                valid = false;
-            }
-            regfree(&regex);
-        }
-    }
-    else if (strcmp(format_str, "time") == 0)
-    {
-        /* ISO 8601 time: HH:MM:SS with optional fractional seconds and timezone */
-        regex_t regex;
-        const char *pattern = "^([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})?$";
-        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
-        {
-            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
-            {
-                if (errors)
-                    append_error(errors, path, "String does not match time format");
-                valid = false;
-            }
-            regfree(&regex);
-        }
-    }
-    else if (strcmp(format_str, "email") == 0)
-    {
-        /* Basic email validation - POSIX ERE doesn't support \s, use explicit chars */
-        regex_t regex;
-        const char *pattern = "^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$";
-        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
-        {
-            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
-            {
-                if (errors)
-                    append_error(errors, path, "String does not match email format");
-                valid = false;
-            }
-            regfree(&regex);
-        }
-    }
-    else if (strcmp(format_str, "hostname") == 0)
-    {
-        /* Hostname validation */
-        regex_t regex;
-        const char *pattern = "^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$";
-        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
-        {
-            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
-            {
-                if (errors)
-                    append_error(errors, path, "String does not match hostname format");
-                valid = false;
-            }
-            regfree(&regex);
-        }
-    }
-    else if (strcmp(format_str, "ipv4") == 0)
-    {
-        /* IPv4 address validation */
-        regex_t regex;
-        const char *pattern = "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$";
-        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
-        {
-            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
-            {
-                if (errors)
-                    append_error(errors, path, "String does not match IPv4 format");
-                valid = false;
-            }
-            regfree(&regex);
-        }
-    }
-    else if (strcmp(format_str, "ipv6") == 0)
-    {
-        /* Simplified IPv6 validation (full addresses only, no :: shorthand for simplicity) */
-        regex_t regex;
-        const char *pattern = "^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::$|^(([0-9a-fA-F]{1,4}:)*[0-9a-fA-F]{1,4})?::([0-9a-fA-F]{1,4}(:([0-9a-fA-F]{1,4}))*)?$";
-        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
-        {
-            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
-            {
-                if (errors)
-                    append_error(errors, path, "String does not match IPv6 format");
-                valid = false;
-            }
-            regfree(&regex);
-        }
-    }
-    else if (strcmp(format_str, "uri") == 0)
-    {
-        /* Basic URI validation */
-        regex_t regex;
-        const char *pattern = "^[a-zA-Z][a-zA-Z0-9+.-]*:.+$";
-        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
-        {
-            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
-            {
-                if (errors)
-                    append_error(errors, path, "String does not match URI format");
-                valid = false;
-            }
-            regfree(&regex);
-        }
-    }
-    else if (strcmp(format_str, "uuid") == 0)
-    {
-        /* UUID validation */
-        regex_t regex;
-        const char *pattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
-        if (regcomp(&regex, pattern, REG_EXTENDED | REG_NOSUB) == 0)
-        {
-            if (regexec(&regex, str, 0, NULL, 0) == REG_NOMATCH)
-            {
-                if (errors)
-                    append_error(errors, path, "String does not match UUID format");
-                valid = false;
-            }
-            regfree(&regex);
-        }
-    }
-    else if (strcmp(format_str, "regex") == 0)
-    {
-        /* Validate that the string is a valid regex */
         regex_t regex;
         if (regcomp(&regex, str, REG_EXTENDED | REG_NOSUB) != 0)
         {
@@ -1915,7 +1821,31 @@ check_format(JsonbValue *data, JsonbValue *format_val, const char *path, StringI
             regfree(&regex);
         }
     }
-    /* Unknown formats are ignored per JSON Schema spec */
+    else
+    {
+        /* Look up format in table */
+        const FormatEntry *entry;
+        for (entry = format_table; entry->name != NULL; entry++)
+        {
+            if (strcmp(format_str, entry->name) == 0)
+            {
+                bool regex_valid;
+                regex_t *cached_regex = get_cached_regex(entry->pattern, &regex_valid);
+
+                if (regex_valid && cached_regex != NULL)
+                {
+                    if (regexec(cached_regex, str, 0, NULL, 0) == REG_NOMATCH)
+                    {
+                        if (errors)
+                            append_error(errors, path, entry->error_msg);
+                        valid = false;
+                    }
+                }
+                break;
+            }
+        }
+        /* Unknown formats are ignored per JSON Schema spec */
+    }
 
     pfree(str);
     pfree(format_str);
@@ -2190,25 +2120,15 @@ jsonschema_validate_compiled(PG_FUNCTION_ARGS)
     Jsonb              *data = PG_GETARG_JSONB_P(0);
     JsonSchemaCompiled *compiled = PG_GETARG_JSONSCHEMA_COMPILED_P(1);
     Jsonb              *schema;
-    StringInfoData      errors;
+    char               *errors;
     Datum               result;
 
     /* The compiled schema is stored as jsonb internally */
     schema = (Jsonb *) compiled;
 
-    initStringInfo(&errors);
-    appendStringInfoChar(&errors, '[');
-
-    (void) validate_jsonb_internal(data, schema, &errors);
-
-    /* Remove trailing comma if present */
-    if (errors.len > 1 && errors.data[errors.len - 1] == ',')
-        errors.len--;
-
-    appendStringInfoChar(&errors, ']');
-
-    result = DirectFunctionCall1(jsonb_in, CStringGetDatum(errors.data));
-    pfree(errors.data);
+    errors = validate_and_build_errors(data, schema);
+    result = DirectFunctionCall1(jsonb_in, CStringGetDatum(errors));
+    pfree(errors);
 
     PG_RETURN_DATUM(result);
 }
