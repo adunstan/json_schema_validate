@@ -91,6 +91,50 @@ static MemoryContext regex_cache_context = NULL;
 
 #define REGEX_CACHE_SIZE 128
 
+/* Forward declarations */
+static void init_regex_cache(void);
+static regex_t *get_cached_regex(const char *pattern, bool *valid);
+static bool validate_jsonb_internal(Jsonb *data, Jsonb *schema, StringInfo errors);
+static bool validate_value_with_root(JsonbValue *data, JsonbValue *schema, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static JsonbValue *get_jsonb_key(JsonbContainer *container, const char *key);
+static const char *jsonb_type_name(JsonbValue *v);
+static bool check_type(JsonbValue *data, JsonbValue *type_val);
+static bool check_enum(JsonbValue *data, JsonbValue *enum_val);
+static bool check_const(JsonbValue *data, JsonbValue *const_val);
+static bool check_properties(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_additional_properties(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_required(JsonbValue *data, JsonbValue *required_val, const char *path, StringInfo errors);
+static bool check_property_names(JsonbValue *data, JsonbValue *prop_names_schema, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_string_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors);
+static bool check_number_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors);
+static bool check_array_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_all_of(JsonbValue *data, JsonbValue *all_of_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_any_of(JsonbValue *data, JsonbValue *any_of_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_one_of(JsonbValue *data, JsonbValue *one_of_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_not(JsonbValue *data, JsonbValue *not_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_if_then_else(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema);
+static bool check_object_size_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors);
+static bool check_format(JsonbValue *data, JsonbValue *format_val, const char *path, StringInfo errors);
+static JsonbValue *resolve_ref(const char *ref, JsonbContainer *root_schema);
+static bool jsonb_values_equal(JsonbValue *a, JsonbValue *b);
+static void append_error(StringInfo errors, const char *path, const char *message);
+static char *build_path(const char *base, const char *key);
+static bool extract_string_from_jsonb(JsonbValue *data, char **str_data, int *str_len);
+static char *validate_and_build_errors(Jsonb *data, Jsonb *schema);
+static bool check_single_type(JsonbValue *data, const char *type_str, int type_len);
+
+PG_FUNCTION_INFO_V1(jsonschema_is_valid_jsonb);
+PG_FUNCTION_INFO_V1(jsonschema_is_valid_json);
+PG_FUNCTION_INFO_V1(jsonschema_validate_jsonb);
+PG_FUNCTION_INFO_V1(jsonschema_validate_json);
+
+/* Compiled schema functions */
+PG_FUNCTION_INFO_V1(jsonschema_compile);
+PG_FUNCTION_INFO_V1(jsonschema_compiled_in);
+PG_FUNCTION_INFO_V1(jsonschema_compiled_out);
+PG_FUNCTION_INFO_V1(jsonschema_is_valid_compiled);
+PG_FUNCTION_INFO_V1(jsonschema_validate_compiled);
+
 /*
  * Initialize the regex cache if not already done
  */
@@ -127,6 +171,7 @@ get_cached_regex(const char *pattern, bool *valid)
     RegexCacheEntry *entry;
     bool        found;
     char        key[256];
+    int         ret;
 
     init_regex_cache();
 
@@ -138,7 +183,7 @@ get_cached_regex(const char *pattern, bool *valid)
     if (!found)
     {
         /* Compile the regex */
-        int ret = regcomp(&entry->regex, pattern, REG_EXTENDED | REG_NOSUB);
+        ret = regcomp(&entry->regex, pattern, REG_EXTENDED | REG_NOSUB);
         entry->valid = (ret == 0);
         if (!entry->valid)
         {
@@ -150,47 +195,6 @@ get_cached_regex(const char *pattern, bool *valid)
     *valid = entry->valid;
     return entry->valid ? &entry->regex : NULL;
 }
-
-/* Forward declarations */
-static bool validate_jsonb_internal(Jsonb *data, Jsonb *schema, StringInfo errors);
-static bool validate_value_with_root(JsonbValue *data, JsonbValue *schema, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static JsonbValue *get_jsonb_key(JsonbContainer *container, const char *key);
-static const char *jsonb_type_name(JsonbValue *v);
-static bool check_type(JsonbValue *data, JsonbValue *type_val);
-static bool check_enum(JsonbValue *data, JsonbValue *enum_val);
-static bool check_const(JsonbValue *data, JsonbValue *const_val);
-static bool check_properties(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static bool check_additional_properties(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static bool check_required(JsonbValue *data, JsonbValue *required_val, const char *path, StringInfo errors);
-static bool check_property_names(JsonbValue *data, JsonbValue *prop_names_schema, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static bool check_string_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors);
-static bool check_number_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors);
-static bool check_array_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static bool check_all_of(JsonbValue *data, JsonbValue *all_of_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static bool check_any_of(JsonbValue *data, JsonbValue *any_of_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static bool check_one_of(JsonbValue *data, JsonbValue *one_of_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static bool check_not(JsonbValue *data, JsonbValue *not_val, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static bool check_if_then_else(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors, JsonbContainer *root_schema);
-static bool check_object_size_constraints(JsonbValue *data, JsonbContainer *schema_obj, const char *path, StringInfo errors);
-static bool check_format(JsonbValue *data, JsonbValue *format_val, const char *path, StringInfo errors);
-static JsonbValue *resolve_ref(const char *ref, JsonbContainer *root_schema);
-static bool jsonb_values_equal(JsonbValue *a, JsonbValue *b);
-static void append_error(StringInfo errors, const char *path, const char *message);
-static char *build_path(const char *base, const char *key);
-static bool extract_string_from_jsonb(JsonbValue *data, char **str_data, int *str_len);
-static char *validate_and_build_errors(Jsonb *data, Jsonb *schema);
-
-PG_FUNCTION_INFO_V1(jsonschema_is_valid_jsonb);
-PG_FUNCTION_INFO_V1(jsonschema_is_valid_json);
-PG_FUNCTION_INFO_V1(jsonschema_validate_jsonb);
-PG_FUNCTION_INFO_V1(jsonschema_validate_json);
-
-/* Compiled schema functions */
-PG_FUNCTION_INFO_V1(jsonschema_compile);
-PG_FUNCTION_INFO_V1(jsonschema_compiled_in);
-PG_FUNCTION_INFO_V1(jsonschema_compiled_out);
-PG_FUNCTION_INFO_V1(jsonschema_is_valid_compiled);
-PG_FUNCTION_INFO_V1(jsonschema_validate_compiled);
 
 /*
  * jsonschema_is_valid(data jsonb, schema jsonb) -> boolean
