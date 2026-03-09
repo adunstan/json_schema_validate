@@ -33,7 +33,9 @@ LANGUAGE C IMMUTABLE PARALLEL SAFE STRICT;
 -- Compiled Schema Support
 -- ============================================================
 
--- Create the compiled schema type
+-- Shell type (needed so I/O functions can reference it)
+CREATE TYPE jsonschema_compiled;
+
 -- Input function
 CREATE FUNCTION jsonschema_compiled_in(cstring)
 RETURNS jsonschema_compiled
