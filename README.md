@@ -113,6 +113,35 @@ SELECT jsonschema_is_valid(
 -- Returns: false
 ```
 
+### Type Arrays
+
+```sql
+-- Allow string or null
+SELECT jsonschema_is_valid('null', '{"type": ["string", "null"]}');
+-- Returns: true
+
+SELECT jsonschema_is_valid('"hello"', '{"type": ["string", "null"]}');
+-- Returns: true
+
+SELECT jsonschema_is_valid('42', '{"type": ["string", "null"]}');
+-- Returns: false
+```
+
+### Enum and Const
+
+```sql
+-- enum: value must be one of the listed values
+SELECT jsonschema_is_valid('"red"', '{"enum": ["red", "green", "blue"]}');
+-- Returns: true
+
+SELECT jsonschema_is_valid('"yellow"', '{"enum": ["red", "green", "blue"]}');
+-- Returns: false
+
+-- const: value must match exactly
+SELECT jsonschema_is_valid('"active"', '{"const": "active"}');
+-- Returns: true
+```
+
 ### Property Validation
 
 ```sql
@@ -141,6 +170,195 @@ SELECT jsonschema_is_valid(
     }'
 );
 -- Returns: false
+```
+
+### String Constraints
+
+```sql
+-- minLength / maxLength
+SELECT jsonschema_is_valid('"hi"', '{"type": "string", "minLength": 3}');
+-- Returns: false
+
+SELECT jsonschema_is_valid('"hello"', '{"type": "string", "maxLength": 10}');
+-- Returns: true
+
+-- pattern: must match regex
+SELECT jsonschema_is_valid('"abc123"', '{"type": "string", "pattern": "^[a-z]+[0-9]+$"}');
+-- Returns: true
+
+-- format: semantic format validation
+SELECT jsonschema_is_valid('"2023-12-25"', '{"type": "string", "format": "date"}');
+-- Returns: true
+
+SELECT jsonschema_is_valid('"not-a-date"', '{"type": "string", "format": "date"}');
+-- Returns: false
+
+SELECT jsonschema_is_valid('"user@example.com"', '{"type": "string", "format": "email"}');
+-- Returns: true
+
+SELECT jsonschema_is_valid('"192.168.1.1"', '{"type": "string", "format": "ipv4"}');
+-- Returns: true
+
+SELECT jsonschema_is_valid('"550e8400-e29b-41d4-a716-446655440000"', '{"type": "string", "format": "uuid"}');
+-- Returns: true
+```
+
+### Number Constraints
+
+```sql
+-- minimum / maximum
+SELECT jsonschema_is_valid('25', '{"type": "number", "minimum": 0, "maximum": 100}');
+-- Returns: true
+
+-- exclusiveMinimum / exclusiveMaximum
+SELECT jsonschema_is_valid('0', '{"type": "number", "exclusiveMinimum": 0}');
+-- Returns: false
+
+SELECT jsonschema_is_valid('100', '{"type": "number", "exclusiveMaximum": 100}');
+-- Returns: false
+
+-- multipleOf
+SELECT jsonschema_is_valid('15', '{"type": "number", "multipleOf": 5}');
+-- Returns: true
+
+SELECT jsonschema_is_valid('7', '{"type": "number", "multipleOf": 3}');
+-- Returns: false
+```
+
+### Array Constraints
+
+```sql
+-- items: validate each element
+SELECT jsonschema_is_valid(
+    '[1, 2, 3]',
+    '{"type": "array", "items": {"type": "integer"}}'
+);
+-- Returns: true
+
+SELECT jsonschema_is_valid(
+    '[1, "two", 3]',
+    '{"type": "array", "items": {"type": "integer"}}'
+);
+-- Returns: false
+
+-- minItems / maxItems
+SELECT jsonschema_is_valid('[1, 2]', '{"type": "array", "minItems": 3}');
+-- Returns: false
+
+SELECT jsonschema_is_valid('[1, 2, 3, 4]', '{"type": "array", "maxItems": 3}');
+-- Returns: false
+
+-- uniqueItems
+SELECT jsonschema_is_valid('[1, 2, 3]', '{"type": "array", "uniqueItems": true}');
+-- Returns: true
+
+SELECT jsonschema_is_valid('[1, 2, 1]', '{"type": "array", "uniqueItems": true}');
+-- Returns: false
+
+-- contains: at least one item must match
+SELECT jsonschema_is_valid(
+    '[1, "hello", 3]',
+    '{"type": "array", "contains": {"type": "string"}}'
+);
+-- Returns: true
+
+-- minContains / maxContains
+SELECT jsonschema_is_valid(
+    '["a", 1, "b", 2]',
+    '{"type": "array", "contains": {"type": "string"}, "minContains": 2, "maxContains": 3}'
+);
+-- Returns: true
+```
+
+### Pattern Properties
+
+```sql
+-- Validate properties whose names match a regex
+SELECT jsonschema_is_valid(
+    '{"name": "John", "age_years": 30, "age_months": 360}',
+    '{
+        "type": "object",
+        "patternProperties": {
+            "^age_": {"type": "integer", "minimum": 0}
+        }
+    }'
+);
+-- Returns: true
+```
+
+### Property Name Validation
+
+```sql
+-- propertyNames: all property names must match a schema
+SELECT jsonschema_is_valid(
+    '{"foo": 1, "bar": 2}',
+    '{"type": "object", "propertyNames": {"maxLength": 3}}'
+);
+-- Returns: true
+
+SELECT jsonschema_is_valid(
+    '{"foo": 1, "longname": 2}',
+    '{"type": "object", "propertyNames": {"maxLength": 3}}'
+);
+-- Returns: false
+```
+
+### Object Size Constraints
+
+```sql
+-- minProperties / maxProperties
+SELECT jsonschema_is_valid(
+    '{"a": 1}',
+    '{"type": "object", "minProperties": 2}'
+);
+-- Returns: false
+
+SELECT jsonschema_is_valid(
+    '{"a": 1, "b": 2, "c": 3}',
+    '{"type": "object", "maxProperties": 2}'
+);
+-- Returns: false
+```
+
+### Conditional Schemas (if/then/else)
+
+```sql
+-- If country is US, then postal code must be a 5-digit zip
+SELECT jsonschema_is_valid(
+    '{"country": "US", "postal_code": "90210"}',
+    '{
+        "type": "object",
+        "if": {
+            "properties": {"country": {"const": "US"}},
+            "required": ["country"]
+        },
+        "then": {
+            "properties": {"postal_code": {"pattern": "^[0-9]{5}$"}}
+        },
+        "else": {
+            "properties": {"postal_code": {"pattern": "^[A-Z][0-9][A-Z] [0-9][A-Z][0-9]$"}}
+        }
+    }'
+);
+-- Returns: true
+
+SELECT jsonschema_is_valid(
+    '{"country": "CA", "postal_code": "K1A 0B1"}',
+    '{
+        "type": "object",
+        "if": {
+            "properties": {"country": {"const": "US"}},
+            "required": ["country"]
+        },
+        "then": {
+            "properties": {"postal_code": {"pattern": "^[0-9]{5}$"}}
+        },
+        "else": {
+            "properties": {"postal_code": {"pattern": "^[A-Z][0-9][A-Z] [0-9][A-Z][0-9]$"}}
+        }
+    }'
+);
+-- Returns: true
 ```
 
 ### Schema Composition
