@@ -439,4 +439,12 @@ SELECT 'format regex: valid' AS test, jsonschema_is_valid('"^[a-z]+$"'::jsonb, '
 SELECT 'format regex: invalid' AS test, jsonschema_is_valid('"[invalid"'::jsonb, '{"format": "regex"}'::jsonb) AS result;
 SELECT 'format unknown: ignored' AS test, jsonschema_is_valid('"anything"'::jsonb, '{"format": "unknown-format"}'::jsonb) AS result;
 
+--
+-- Compiled schema with json data
+--
+SELECT 'json+compiled: is_valid true' AS test, jsonschema_is_valid('{"name": "John", "age": 30}'::json, '{"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}, "age": {"type": "integer"}}}'::jsonschema_compiled) AS result;
+SELECT 'json+compiled: is_valid false' AS test, jsonschema_is_valid('{"name": 123}'::json, '{"type": "object", "properties": {"name": {"type": "string"}}}'::jsonschema_compiled) AS result;
+SELECT 'json+compiled: validate valid' AS test, jsonschema_validate('{"name": "John"}'::json, '{"type": "object", "properties": {"name": {"type": "string"}}}'::jsonschema_compiled) AS result;
+SELECT 'json+compiled: validate errors' AS test, jsonschema_validate('{"name": 123}'::json, '{"type": "object", "properties": {"name": {"type": "string"}}}'::jsonschema_compiled) AS result;
+
 DROP EXTENSION json_schema_validate;

@@ -10,7 +10,7 @@ A PostgreSQL extension for validating JSON/JSONB data against JSON Schema.
 
 - Validates both `json` and `jsonb` types
 - Returns boolean for simple validation or detailed error messages
-- Supports most JSON Schema Draft 7 keywords
+- Supports a wide range of JSON Schema keywords (compatible with Draft 7 and later)
 - Schema composition with `allOf`, `anyOf`, `oneOf`, `not`
 - Schema reuse with `$ref` and `$defs`
 - Immutable and parallel-safe functions
@@ -79,10 +79,12 @@ Compiles a JSON schema for efficient repeated validation. The compiled schema ca
 
 ```sql
 jsonschema_is_valid(data jsonb, schema jsonschema_compiled) → boolean
+jsonschema_is_valid(data json, schema jsonschema_compiled) → boolean
 jsonschema_validate(data jsonb, schema jsonschema_compiled) → jsonb
+jsonschema_validate(data json, schema jsonschema_compiled) → jsonb
 ```
 
-Validate using a pre-compiled schema. See [Compiled Schemas](#compiled-schemas) for usage examples.
+Validate using a pre-compiled schema. Both `json` and `jsonb` data are supported. See [Compiled Schemas](#compiled-schemas) for usage examples.
 
 ## Usage Examples
 

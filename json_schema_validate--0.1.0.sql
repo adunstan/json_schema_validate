@@ -75,3 +75,17 @@ CREATE FUNCTION jsonschema_validate(data jsonb, schema jsonschema_compiled)
 RETURNS jsonb
 AS 'MODULE_PATHNAME', 'jsonschema_validate_compiled'
 LANGUAGE C IMMUTABLE PARALLEL SAFE STRICT;
+
+-- Validate json data against a compiled schema
+-- Returns true if valid, false otherwise
+CREATE FUNCTION jsonschema_is_valid(data json, schema jsonschema_compiled)
+RETURNS boolean
+AS 'MODULE_PATHNAME', 'jsonschema_is_valid_json_compiled'
+LANGUAGE C IMMUTABLE PARALLEL SAFE STRICT;
+
+-- Validate json data against a compiled schema and return errors
+-- Returns NULL if valid, or a JSONB array of error objects if invalid
+CREATE FUNCTION jsonschema_validate(data json, schema jsonschema_compiled)
+RETURNS jsonb
+AS 'MODULE_PATHNAME', 'jsonschema_validate_json_compiled'
+LANGUAGE C IMMUTABLE PARALLEL SAFE STRICT;

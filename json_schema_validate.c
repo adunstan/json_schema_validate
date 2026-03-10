@@ -134,6 +134,8 @@ PG_FUNCTION_INFO_V1(jsonschema_compiled_in);
 PG_FUNCTION_INFO_V1(jsonschema_compiled_out);
 PG_FUNCTION_INFO_V1(jsonschema_is_valid_compiled);
 PG_FUNCTION_INFO_V1(jsonschema_validate_compiled);
+PG_FUNCTION_INFO_V1(jsonschema_is_valid_json_compiled);
+PG_FUNCTION_INFO_V1(jsonschema_validate_json_compiled);
 
 /*
  * Initialize the regex cache if not already done
@@ -2126,6 +2128,65 @@ jsonschema_validate_compiled(PG_FUNCTION_ARGS)
     Jsonb              *schema;
     char               *errors;
     Datum               result;
+
+    /* The compiled schema is stored as jsonb internally */
+    schema = (Jsonb *) compiled;
+
+    errors = validate_and_build_errors(data, schema);
+    result = DirectFunctionCall1(jsonb_in, CStringGetDatum(errors));
+    pfree(errors);
+
+    PG_RETURN_DATUM(result);
+}
+
+/*
+ * jsonschema_is_valid(data json, schema jsonschema_compiled) -> boolean
+ *
+ * Validates json data against a pre-compiled schema.
+ */
+Datum
+jsonschema_is_valid_json_compiled(PG_FUNCTION_ARGS)
+{
+    text               *data_text = PG_GETARG_TEXT_PP(0);
+    JsonSchemaCompiled *compiled = PG_GETARG_JSONSCHEMA_COMPILED_P(1);
+    Jsonb              *data;
+    Jsonb              *schema;
+    Datum               data_jsonb;
+    bool                result;
+
+    /* Convert json data to jsonb */
+    data_jsonb = DirectFunctionCall1(jsonb_in,
+        CStringGetDatum(text_to_cstring(data_text)));
+    data = DatumGetJsonbP(data_jsonb);
+
+    /* The compiled schema is stored as jsonb internally */
+    schema = (Jsonb *) compiled;
+
+    result = validate_jsonb_internal(data, schema, NULL);
+
+    PG_RETURN_BOOL(result);
+}
+
+/*
+ * jsonschema_validate(data json, schema jsonschema_compiled) -> jsonb
+ *
+ * Validates json data against a pre-compiled schema and returns errors.
+ */
+Datum
+jsonschema_validate_json_compiled(PG_FUNCTION_ARGS)
+{
+    text               *data_text = PG_GETARG_TEXT_PP(0);
+    JsonSchemaCompiled *compiled = PG_GETARG_JSONSCHEMA_COMPILED_P(1);
+    Jsonb              *data;
+    Jsonb              *schema;
+    Datum               data_jsonb;
+    char               *errors;
+    Datum               result;
+
+    /* Convert json data to jsonb */
+    data_jsonb = DirectFunctionCall1(jsonb_in,
+        CStringGetDatum(text_to_cstring(data_text)));
+    data = DatumGetJsonbP(data_jsonb);
 
     /* The compiled schema is stored as jsonb internally */
     schema = (Jsonb *) compiled;
